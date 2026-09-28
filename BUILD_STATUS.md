@@ -1,0 +1,71 @@
+# BUILD_STATUS
+
+_Last updated: 2026-09-28, end of build session 1_
+
+## Environment (inspected)
+- WSL2 Ubuntu (Linux 6.6), 8 CPU cores, 7 GB RAM, no GPU.
+- Python 3.12.3 with uv 0.12; Node 24.16.
+- No system ffmpeg; PyAV bundles its own FFmpeg libraries.
+- Chromium system libraries are missing on this host. Playwright ran using libraries downloaded to the session scratchpad. On your machine, run `sudo npx playwright install-deps chromium`.
+
+## Modules (spec §3)
+| # | Module | Status |
+|---|---|---|
+| 1 | Voice/text console + speech output | Built. Real STT verified. Browser TTS and hands-free mode not device-tested. |
+| 2 | Chief/router + bounded specialists | Built: Tasks, Calendar, Chief/Briefing, Meeting Debrief, School/GTA, Training/Business, Knowledge, Local Operator. |
+| 3 | Proposal → approval → execution → verification → history | Built and contract-tested. |
+| 4 | Todoist + Google Calendar | Real adapters and connection flows built. Live verification pending credentials and approval. |
+| 5 | Memory, project memory, searchable evidence | Built (SQLite FTS5, versions, supersede/conflict, forget). |
+| 6 | Daily Command / Nightly Debrief / War Room + durable schedules | Built. Worker-run without a browser. DST and misfire handling tested. |
+| 7 | Local docs/images/PDF/DOCX/ipynb + selected Drive | Built. Visual blocks proven at request level. Live model response pending. |
+| 8 | ICS deadline feed | Built (SSRF-guarded, encrypted URL, own/GTA mapping). Live feed pending. |
+| 9 | Local operator (workspace roots) | Built and verified on a real filesystem. |
+| 10 | Dashboard, diagnostics, costs, backup | Built: responsive PWA, doctor, budget ledger, backup/restore. |
+| + | GitHub read-only; Obsidian/Markdown folder | GitHub adapter built. A Markdown folder can be used as a read-only workspace root today; auto-ingest into search is not built. |
+
+## Test results (actual commands)
+| Command | Result |
+|---|---|
+| `cd backend && uv run pytest -q` | 206 passed, including real faster-whisper on real speech |
+| `cd backend && uv run ruff check src tests` | clean |
+| `cd frontend && npm run typecheck && npm run build` | pass |
+| `cd frontend && npx playwright test` | 14 passed (mocked API) |
+| `cd frontend && npx playwright test -c playwright.live.config.ts` | 1 passed (real backend, real speech through Chromium's mic, no mocks) |
+| Clean-copy install (`uv sync`, `npm ci`, build, pytest, serve) in a scratch directory | pass |
+
+Measured on this host:
+- STT: an 8.7 s utterance takes ~0.8 s via CLI and ~2.2 s via HTTP (including decode). The first model load takes ~19 s and downloads 142 MB.
+- A command response on the deterministic path takes tens of milliseconds.
+- Latency is also recorded live under `/api/metrics/latency`.
+
+## Decisions
+- **Interpreter:** deterministic and always available. Model calls are optional, gated by budget, and validated (date phrases must appear verbatim in what was said).
+- **Todoist writes:** Sync API command `uuid` (the documented idempotency mechanism), plus a `[jarvis:op=…]` marker in the description for reconciliation.
+- **Calendar writes:**
+  - Deterministic client event ID plus a `jarvis_op` private extended property; a 409 means read back and verify.
+  - Least-privilege scopes: `calendar.events.owned`, `calendar.events.readonly`, `calendar.calendarlist.readonly`, `calendar.freebusy`, openid, email.
+  - Writes only go to calendars AJ owns.
+- **Drive:** default scope is `drive.readonly`, with an application-layer allowlist of selected roots. The `drive.file` trade-off is documented.
+- **STT confidence:** mean word probability. The voice-approval gate defaults to 0.55. Measured: "Approve." 0.58, "Change Thursday to Friday." 0.95. The gate has not been tuned on AJ's voice.
+- **Anthropic refusal `fallbacks` parameter:** off by default. The fallback model's pricing may fall outside the local ledger; it can be opted into later.
+- **Setup lockout:** the owner can only be created from loopback. There is no default password.
+- **Audio:** never written to disk unless retention is opted into.
+- **Deliberately not used:** vector DB, Redis, LangGraph, n8n, containers (see ARCHITECTURE.md).
+
+## Blockers (need AJ)
+1. Todoist API token, plus a dedicated "Jarvis Test" project for live verification.
+2. A Google Cloud OAuth Web client (ID and secret in `.env`) and consent; a "Jarvis Test" calendar.
+3. Private ICS deadline-feed URL; confirm course mappings (own vs GTA).
+4. Optional: Anthropic API key, a budget choice, and approval of a bounded live test (proposed: $0.25 cap).
+5. A device test on iPhone (HTTPS via Tailscale, mic, installed web app, Web Push).
+
+## Next actions
+1. After credentials: run the bounded live plan in LIVE_VERIFICATION.md and record the results.
+2. On-device checks: Chrome/Edge mic with your own voice (tune `JARVIS_STT_MIN_CONFIDENCE`), TTS voices, and a hands-free session.
+3. Frontend contract refinements requested by the UI build:
+   - Allow `revise` to edit assumptions.
+   - Add `GET /api/captures/{id}` and `GET /api/runs/{id}`.
+   - Server-sent streaming of run events. Today, events come back with the response; the deterministic path is fast, but model calls aren't streamed.
+4. Tell AJ which fragments were dropped. The interpreter currently drops dangling verb-only fragments (such as a trailing "I need to grade") silently.
+5. Obsidian/Markdown: add "index this workspace folder into search" through the existing ingestion pipeline.
+6. Optional: an always-on host (DEPLOYMENT.md §2).
