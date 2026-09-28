@@ -1,0 +1,48 @@
+# --- secrets & credentials (never commit) ---
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secret.key
+credentials*.json
+client_secret*.json
+token*.json
+
+# --- private runtime data ---
+backend/data/
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+recordings/
+/audio/
+backend/data/audio/
+*.webm.tmp
+backups/
+
+# --- model weights / caches ---
+models/
+*.bin
+*.safetensors
+.cache/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# --- frontend ---
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/e2e/screenshots/*.png
+
+# --- OS/editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+frontend/e2e-live/screenshots/
