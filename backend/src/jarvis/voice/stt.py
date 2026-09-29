@@ -26,6 +26,11 @@ SUPPORTED_MIME_PREFIXES = ("audio/webm", "audio/mp4", "audio/ogg", "audio/wav", 
 MODEL_SIZES_MB = {"tiny.en": 75, "base.en": 142, "small.en": 484, "medium.en": 1530, "large-v3": 3100}
 
 
+# Biases local transcription toward AJ's vocabulary (names, courses, apps). Plain text; never sent anywhere.
+VOCAB_PROMPT = ("Jarvis, Todoist, Google Calendar, IS 640, MSC 550, IS 401, IS 501, MKT 601, GTA, iFlex, Rumble, "
+                "Yi Tan, DJ Hovermale, CCM, Monk Mode, AI GURU.")
+
+
 class AudioError(Exception):
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -163,8 +168,9 @@ class WhisperEngine:
             self.state = "loading" if self.model_downloaded() else "downloading"
             t = time.perf_counter()
             try:
+                # Already downloaded → load strictly offline (no Hugging Face call on every start).
                 self._model = WhisperModel(self.model_name, device=s.stt_device, compute_type=s.stt_compute_type,
-                                           download_root=str(s.models_dir))
+                                           download_root=str(s.models_dir), local_files_only=self.model_downloaded())
             except Exception as e:
                 self.state = "error"
                 self.error = (f"Could not load/download model '{self.model_name}': {type(e).__name__}: {e}. "
@@ -187,7 +193,8 @@ class WhisperEngine:
         model = self._ensure()
         t = time.perf_counter()
         segments, info = model.transcribe(audio.samples, language="en", vad_filter=True, beam_size=5,
-                                          condition_on_previous_text=False, word_timestamps=True)
+                                          condition_on_previous_text=False, word_timestamps=True,
+                                          hotwords=VOCAB_PROMPT if audio.duration_s >= 3.0 else None)
         segs = []
         word_probs: list[float] = []
         logprobs = []

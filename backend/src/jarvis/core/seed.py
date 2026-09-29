@@ -60,6 +60,8 @@ DEFAULT_SETTINGS = {
                "effort": "low", "chosen": False},
     "models": {"chief": "claude-opus-5-5", "vision": "claude-opus-5-5", "briefing": "claude-opus-5-5"},
     "todoist": {"area_projects": {}},
+    "location": {"name": "Huntsville, AL", "lat": 34.7304, "lon": -86.5861},
+    "weather": {"enabled": True, "provider": "open-meteo"},
 }
 
 

@@ -1,3 +1,4 @@
+import { MessageText } from '../components/MessageText';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, errorMessage } from '../api/client';
 import type { CommandResponse, EvidencePreview, JDocument, RunEvent } from '../api/types';
@@ -74,7 +75,7 @@ function ResponseView({ resp }: { resp: CommandResponse }) {
         ))}
       </div>
       <Events events={resp.events ?? []} />
-      <p className="bubble-text">{resp.message?.text}</p>
+      <MessageText text={resp.message?.text} />
       {resp.questions?.length > 0 && (
         <ul className="questions">
           {resp.questions.map((q, i) => (
@@ -224,7 +225,7 @@ export function ConsolePage() {
                   <span>{e.message.role === 'user' ? 'You' : 'JARVIS'}</span>
                   <span className="muted small">{fmtTime(e.message.created_at)}</span>
                 </div>
-                <p className="bubble-text">{e.message.text}</p>
+                <MessageText text={e.message.text} />
               </div>
             );
           if (e.kind === 'error')

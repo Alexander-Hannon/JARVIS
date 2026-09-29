@@ -525,9 +525,9 @@ export function VoicePanel({ focusTyped, retainAudio }: { focusTyped: () => void
               className="btn"
               disabled={!!capability || phase !== 'idle' || !SilenceDetector.supported()}
               onClick={() => void startHandsFree()}
-              title={capability ? capability.message : undefined}
+              title={capability ? capability.message : 'Foreground conversation with automatic silence detection and a time limit. No wake word; stops if you leave the app.'}
             >
-              Start hands-free session
+              Hands-free
             </button>
             <span className="hint hide-mobile">
               Foreground conversation with automatic silence detection and a time limit. No wake word; stops if you leave the app.

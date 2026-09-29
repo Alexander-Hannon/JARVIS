@@ -337,3 +337,53 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: 0.35; }
   .btn { letter-spacing: 0.08em; }
   .reactor { width: 92px; height: 92px; }
 }
+
+/* ---------- rich replies ---------- */
+.msg-rich { display: flex; flex-direction: column; gap: 3px; }
+.msg-line { margin: 0; }
+.msg-gap { height: 6px; }
+.msg-section {
+  margin: 10px 0 2px;
+  font-family: var(--display);
+  font-size: 0.72rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--accent);
+  text-shadow: var(--glow);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 3px;
+}
+.msg-section:first-child { margin-top: 0; }
+.msg-bullet { display: flex; gap: 8px; padding-left: 4px; }
+.msg-bullet > span:first-child { color: var(--accent-2); font-size: 0.6rem; line-height: 1.9; }
+.msg-rich strong { color: #fff; font-weight: 700; }
+
+/* ---------- compact command dock: the conversation stays visible ---------- */
+.composer-wrap {
+  background: linear-gradient(180deg, rgba(2, 6, 13, 0) 0, var(--bg) 12px);
+  padding-top: 10px;
+  gap: 8px;
+}
+.composer-wrap .voice {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 8px 14px;
+  gap: 10px 16px;
+}
+.composer-wrap .voice-main { flex: 1 1 420px; gap: 16px; }
+.composer-wrap .reactor { width: 64px; height: 64px; }
+.composer-wrap .reactor-ring.r1 { inset: -6px; }
+.composer-wrap .reactor-ring.r2 { inset: 8px; }
+.composer-wrap .record-btn { flex-direction: row; gap: 12px; }
+.composer-wrap .record-label { font-size: 0.66rem; }
+.composer-wrap .handsfree { flex: 0 0 auto; border: 0; padding: 0; margin: 0; }
+.composer-wrap .handsfree-idle .hint { display: none; }
+.composer-wrap .voice::after, .composer-wrap .voice::before { width: 12px; height: 12px; }
+.composer-wrap .composer { padding: 8px; }
+.composer-wrap .composer textarea { min-height: 44px; }
+.composer-wrap .transcript, .composer-wrap .voice-error { flex: 1 1 100%; }
+@media (max-width: 640px) {
+  .composer-wrap .record-btn { flex-direction: column; gap: 4px; }
+  .composer-wrap .reactor { width: 76px; height: 76px; }
+}
