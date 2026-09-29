@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { api } from '../api/client';
 import { NavLink, Link } from 'react-router-dom';
 import { useControl, useNotifications, useSpeech } from '../state/app';
 import { BellIcon, PauseIcon, PlayIcon } from './icons';
@@ -95,6 +96,30 @@ function StopSpeaking() {
   );
 }
 
+/** HUD readout: live clock + REAL worker heartbeat (never a decorative "all systems nominal"). */
+function HudStatus() {
+  const [now, setNow] = useState(() => new Date());
+  const [worker, setWorker] = useState<boolean | null>(null);
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(new Date()), 1000);
+    const poll = () => api.workerStatus().then((w) => setWorker(!!w.alive), () => setWorker(false));
+    poll();
+    const w = window.setInterval(poll, 30000);
+    return () => {
+      window.clearInterval(t);
+      window.clearInterval(w);
+    };
+  }, []);
+  return (
+    <div className="hud-status" aria-label="System status">
+      <span className="hud-clock">{now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+      <span className={`hud-chip ${worker ? 'on' : worker === false ? 'off' : ''}`} title="Background worker heartbeat">
+        <i aria-hidden="true" /> {worker === null ? 'CHECKING' : worker ? 'WORKER ONLINE' : 'WORKER OFFLINE'}
+      </span>
+    </div>
+  );
+}
+
 export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="shell">
@@ -123,6 +148,7 @@ export function Layout({ children }: { children: ReactNode }) {
             <span className="brand-mark" aria-hidden="true" />
             JARVIS
           </div>
+          <HudStatus />
           <div className="topbar-right">
             <StopSpeaking />
             <PauseControl />

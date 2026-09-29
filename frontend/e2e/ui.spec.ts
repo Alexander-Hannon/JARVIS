@@ -179,6 +179,8 @@ test.describe('UI (mocked API)', () => {
       json: capture({ transcript: { version: 2, text: (call.json as { text: string }).text, source: 'user_edit', confidence: null, latency_ms: null, model: null } }),
     }));
     api.on('POST', '/api/commands', () => ({ json: commandResponse(null, 'Noted. Anything else?') }));
+    // Review mode (auto-send off): the transcript is shown for editing before sending.
+    await page.addInitScript(() => localStorage.setItem('jarvis.autoSend', 'false'));
     await page.goto('/console');
     const rec = page.getByTestId('record-btn');
     await rec.click(); // tap to start
@@ -208,6 +210,22 @@ test.describe('UI (mocked API)', () => {
     const cmd = api.callsTo('POST', '/api/commands')[0].json as Record<string, unknown>;
     expect(cmd).toMatchObject({ channel: 'voice', capture_id: 'cap-1', transcript_version: 2, text: 'add review lab report tomorrow at 3pm', speech_playing: false, conversation_id: 'conv-1' });
     expect(typeof cmd.tz).toBe('string');
+  });
+
+  test('seamless default: one tap to speak, stop → transcribed and sent without a second click', async ({ page }) => {
+    const api = await setupApp(page);
+    api.on('POST', '/api/captures/audio', () => ({ json: capture() }));
+    api.on('POST', '/api/commands', () => ({ json: commandResponse(null, 'Noted. Anything else?') }));
+    await page.goto('/console');
+    await expect(page.getByLabel(/Send automatically/)).toBeChecked();
+    const rec = page.getByTestId('record-btn');
+    await rec.click();
+    await expect(page.getByTestId('voice-status')).toContainText('Recording');
+    await page.waitForTimeout(900);
+    await rec.click();
+    await expect(page.getByText('Noted. Anything else?')).toBeVisible();
+    expect(api.callsTo('POST', '/api/commands')[0].json).toMatchObject({ channel: 'voice', capture_id: 'cap-1', transcript_version: 1 });
+    await expect(page.getByTestId('send-transcript')).toHaveCount(0);
   });
 
   test('server audio errors (422 no_speech) are shown as voice errors, typed input stays usable', async ({ page }) => {
@@ -315,8 +333,7 @@ test.describe('UI (mocked API) — mobile 390x844', () => {
     await page.screenshot({ path: `${SHOTS}/mobile-recording.png` });
     await page.waitForTimeout(900);
     await page.getByRole('button', { name: 'Stop & transcribe' }).tap();
-    await expect(page.getByTestId('transcript-text')).toHaveValue('add review lab report tomorrow');
-    await page.getByTestId('send-transcript').tap();
+    // seamless: no separate send step
     const card = page.getByTestId('proposal-card');
     await expect(card).toBeVisible();
     await card.getByTestId('item-0').getByRole('checkbox').tap();

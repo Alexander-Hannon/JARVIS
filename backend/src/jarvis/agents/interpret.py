@@ -16,9 +16,13 @@ LEAD_INS = [
     r"i also need to", r"i need to", r"i have to", r"i've got to", r"i got to", r"i gotta", r"i should", r"i must",
     r"remind me to", r"don't let me forget to", r"please", r"can you", r"could you", r"add a task to", r"add a to-?do to",
     r"add task", r"add", r"to-?do:?", r"also", r"and", r"then", r"jarvis,?", r"hey jarvis,?", r"ok(ay)?,?",
+    r"i want you to", r"i need you to", r"i'd like you to", r"will you", r"would you", r"don't forget to",
+    r"make sure to", r"make sure i", r"set a reminder to", r"after that", r"plus",
 ]
 _LEAD_RE = re.compile(r"^\s*(?:" + "|".join(LEAD_INS) + r")\b[\s,:]*", re.IGNORECASE)
-VERBS = set(["grade", "follow", "buy", "call", "email", "text", "send", "schedule", "book", "finish", "submit", "write", "read", "review", "pay", "pick", "prepare", "prep", "meet", "check", "update", "clean", "go", "do", "study", "work", "plan", "create", "draft", "fix", "reply", "respond", "order", "return", "cancel", "renew", "practice", "train", "run", "lift", "pray", "attend", "set", "make", "get", "file", "print", "post", "upload", "record", "research", "contact", "ask", "start", "complete", "wash", "cook", "drop", "bring", "take", "register", "sign", "mail", "refill", "organize", "outline", "edit", "revise", "message", "ping", "confirm", "return", "visit", "renew", "rsvp"])
+VERBS = set(["shop", "remind", "see", "talk", "tell", "look", "find", "install", "move", "sell", "try", "help", "watch",
+              "listen", "pack", "charge", "feed", "walk", "water", "wake", "donate", "deliver", "schedule", "meet", "have",
+              "grade", "follow", "buy", "call", "email", "text", "send", "schedule", "book", "finish", "submit", "write", "read", "review", "pay", "pick", "prepare", "prep", "meet", "check", "update", "clean", "go", "do", "study", "work", "plan", "create", "draft", "fix", "reply", "respond", "order", "return", "cancel", "renew", "practice", "train", "run", "lift", "pray", "attend", "set", "make", "get", "file", "print", "post", "upload", "record", "research", "contact", "ask", "start", "complete", "wash", "cook", "drop", "bring", "take", "register", "sign", "mail", "refill", "organize", "outline", "edit", "revise", "message", "ping", "confirm", "return", "visit", "renew", "rsvp"])
 
 AREA_KEYWORDS = [
     ("gta", [r"\bis[ -]?640\b", r"\bmsc[ -]?550\b", r"\bis[ -]?401\b", r"\bis[ -]?501\b", r"\bgrad(e|ing)\b", r"\bgta\b",
@@ -83,27 +87,45 @@ def _first_word(s: str) -> str:
     return m.group(1).lower() if m else ""
 
 
+WAKE_RE = re.compile(r"(?:^|(?<=[.!?]\s))\s*(?:(?:yo|hey|hi|hello|ok(?:ay)?|alright|so|um+|uh+)[\s,]+)*jarvis\b[\s,.:!?-]*",
+                     re.IGNORECASE)
+# Phrases that begin a new commitment even in the middle of a sentence ("... and then remind me to ...").
+_MID_LEAD = (r"(?:(?:can|could|would|will) you\s+|please\s+|i (?:want|need) you to\s+|i'd like you to\s+)?"
+             r"(?:remind me to|i (?:also )?need to|i have to|i've got to|i got to|i gotta|don't let me forget to|"
+             r"don't forget to|make sure (?:i|to)|set a reminder to|add a (?:task|to-?do) to)\b")
+_SPLIT_BEFORE_LEAD = re.compile(r"\s*,?\s+(?:(?:and|also|plus)\s+)?(?:then\s+)?(?=" + _MID_LEAD + ")", re.IGNORECASE)
+
+
+def strip_wake(text: str) -> str:
+    """Remove "Hey/Yo/OK Jarvis," style addressing — it's never a task."""
+    return WAKE_RE.sub("", text).strip()
+
+
 def split_commitments(text: str) -> list[str]:
-    t = re.sub(r"\s+", " ", text.strip())
-    parts = re.split(r"\s*;\s*|\.\s+(?=[A-Z])", t)
+    t = re.sub(r"\s+", " ", strip_wake(text.strip()))
+    parts = re.split(r"\s*;\s*|(?<=[.!?])\s+(?=[A-Za-z])", t)
     out: list[str] = []
     for p in parts:
-        # split on ", and " / ", " / " and " / " then " only when the right side starts a new commitment
-        chunks = re.split(r"(,\s*(?:and\s+|then\s+)?|\s+and\s+(?:then\s+)?|\s+then\s+|\s+also\s+)", p)
-        cur = chunks[0]
-        i = 1
-        while i < len(chunks):
-            sep, nxt = chunks[i], chunks[i + 1] if i + 1 < len(chunks) else ""
-            fw = _first_word(nxt)
-            starts_new = fw in VERBS or bool(re.match(r"\s*(i (also )?(need|have) to|remind me|i've got to|i should)", nxt, re.IGNORECASE))
-            if starts_new:
-                out.append(cur)
-                cur = nxt
-            else:
-                cur = cur + sep + nxt
-            i += 2
-        out.append(cur)
-    return [c.strip(" ,.;") for c in out if c and c.strip(" ,.;")]
+        p = strip_wake(p)
+        for q in _SPLIT_BEFORE_LEAD.split(p):
+            # "then" / "after that" always starts a new commitment; ", " / " and " only when the right side does.
+            chunks = re.split(r"(,?\s+(?:and\s+)?then\s+|,?\s+after that,?\s+|,\s*(?:and\s+)?|\s+and\s+|\s+also\s+)", q)
+            cur = chunks[0]
+            i = 1
+            while i < len(chunks):
+                sep, nxt = chunks[i], chunks[i + 1] if i + 1 < len(chunks) else ""
+                always = bool(re.search(r"\bthen\b|after that", sep, re.IGNORECASE)) and len(nxt.split()) >= 2
+                starts_new = always or _first_word(nxt) in VERBS
+                if starts_new:
+                    out.append(cur)
+                    cur = nxt
+                else:
+                    cur = cur + sep + nxt
+                i += 2
+            out.append(cur)
+    cleaned = [re.sub(r"[,\s]+(?:please|thanks?|thank you)\s*$", "", c.strip(" ,.;!?"), flags=re.I).strip(" ,.;!?")
+               for c in out]
+    return [c for c in cleaned if c and not re.fullmatch(r"(?:thanks?|thank you|please|jarvis|ok(?:ay)?|that's (?:it|all))", c, re.I)]
 
 
 def extract_commitments(text: str, captured_at: datetime, tz: str) -> list[Commitment]:

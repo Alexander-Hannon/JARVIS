@@ -261,10 +261,29 @@ def _capture(conn, inp: CommandInput, commitments: list[Commitment], reply: Repl
     if blocked:
         reply.say("Before I can add them: " + "; ".join(blocked) + ".")
     reply.questions += questions
-    spoken = f"{len(specs)} tasks: " + "; ".join(ln.split('. ', 1)[1] for ln in lines) + ". Approve?"
-    reply.spoken = spoken if not blocked else spoken.replace("Approve?", blocked[0] + ".")
+    n = len(specs)
+    said = "; ".join(f"{c.content}, {_spoken_date(s.args.get('due_date') or (s.args.get('due_local') or '')[:10], inp.tz)}"
+                     if (s.args.get('due_date') or s.args.get('due_local')) else c.content for c, s in zip(commitments, specs))
+    head = f"I have {n} task{'s' if n != 1 else ''} ready: {said}."
+    reply.spoken = head + (" Shall I add them?" if not blocked else " One thing first — " + blocked[0].split(" (")[0].lower() + ".")
     _new_proposal(conn, inp, reply, run_id, f"{len(specs)} task(s) from your request", specs,
                   "; ".join(ln.split('. ', 1)[1] for ln in lines), assumptions, questions)
+
+
+def _spoken_date(iso_date: str, tz: str = "America/Chicago") -> str:
+    try:
+        d = date.fromisoformat(iso_date[:10])
+    except ValueError:
+        return iso_date
+    from zoneinfo import ZoneInfo
+
+    from jarvis.core.util import utcnow
+    today = utcnow().astimezone(ZoneInfo(tz)).date()
+    if d == today:
+        return "today"
+    if (d - today).days == 1:
+        return "tomorrow"
+    return d.strftime("%A") if 0 < (d - today).days < 7 else d.strftime("%A, %B %-d")
 
 
 def _fmt_date(s: str) -> str:
@@ -345,7 +364,7 @@ def _voice_approve(conn, inp: CommandInput, it: Interpretation, reply: Reply, ru
         return
     reply.proposal_id = None
     reply.say(f"Approved {len(sel)} item(s) of version {v['version']}. Executing and verifying with the provider now.")
-    reply.spoken = "Approved. Executing and verifying now."
+    reply.spoken = "Very good. Executing now — I'll confirm once the provider has it."
     run_event(conn, run_id, "approval", f"Approved via {inp.channel}: items {[s + 1 for s in sel]}")
     conn.execute("UPDATE messages SET proposal_id=? WHERE run_id=? AND role='user'", (active["id"], run_id))
 
@@ -412,7 +431,7 @@ def _correct(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id: 
     new_v = P.revise(conn, active["id"], specs, "; ".join(changes), actor="user")
     reply.proposal_id = active["id"]
     reply.say(f"Updated (version {new_v}): " + "; ".join(changes) + ". The earlier version can no longer be approved.")
-    reply.spoken = "Updated: " + "; ".join(changes) + ". Approve?"
+    reply.spoken = "Updated. " + "; ".join(changes) + ". Shall I proceed?"
     run_event(conn, run_id, "status", f"Plan revised to v{new_v}; prior approval voided")
 
 
@@ -454,7 +473,7 @@ def _remember(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id:
     if res["superseded"]:
         old = [memory.get(conn, m, with_versions=False)["content"] for m in res["superseded"]]
         reply.say("This replaces: " + " | ".join(f"“{o}”" for o in old))
-    reply.spoken = "Got it. Saved." + (" That replaces an older preference." if res["superseded"] else "")
+    reply.spoken = "Noted. I'll remember that." + (" It replaces your earlier preference." if res["superseded"] else "")
 
 
 def _question(conn, inp: CommandInput, reply: Reply, run_id: str) -> None:

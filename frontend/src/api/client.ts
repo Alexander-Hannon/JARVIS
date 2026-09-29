@@ -99,6 +99,17 @@ export async function request<R>(path: string, opts: RequestOpts = {}): Promise<
   return parsed as R;
 }
 
+/** Local neural TTS (Piper on the Jarvis host). Returns WAV bytes. */
+export async function fetchTtsAudio(text: string, preset: string, signal?: AbortSignal): Promise<Blob> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+  const res = await fetch('/api/voice/tts', {
+    method: 'POST', headers, body: JSON.stringify({ text, preset }), credentials: 'same-origin', signal, cache: 'no-store',
+  });
+  if (!res.ok) throw new ApiError(res.status, `Voice synthesis failed (${res.status})`, 'tts_unavailable', null);
+  return res.blob();
+}
+
 const q = (params: Record<string, string | number | undefined | null>): string => {
   const s = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') s.set(k, String(v));

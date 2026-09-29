@@ -90,8 +90,8 @@ Python with explicit limits — no framework needed.
 - **Broader computer control**: a separate, typed "computer-use" adapter behind the same approval executor, with per-app
   allowlists and screen-recording consent; never a generic shell.
 - **Wake word**: on-device keyword spotter in a desktop companion app (browsers/iPhone can't listen in the background).
-- **Richer TTS**: provider interface exists in the frontend (`voice/tts.ts`); add a local neural TTS (e.g. Piper) or cloud TTS
-  with an explicit data-flow indicator.
+- **Richer TTS**: local neural TTS (Piper, `voice/tts.py`) is implemented. Next options: a custom-trained voice, or cloud TTS
+  behind an explicit data-flow indicator.
 - **More integrations**: Notion API (currently deep links), Gmail drafts (draft-only), Canvas API (read-only, if approved by AJ),
   MCP connectors behind the same scope/approval checks.
 - **Embeddings**: only after an evaluated retrieval need.

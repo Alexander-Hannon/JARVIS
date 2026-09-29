@@ -57,6 +57,8 @@ def set_todoist_target(conn, project_id: str, area_projects: dict | None = None)
             data = jload(r["data"], {})
             data.setdefault("todoist", {})["area_projects"] = area_projects
             conn.execute("UPDATE user_settings SET data=?, updated_at=? WHERE id=1", (jdump(data), now_iso()))
+    from jarvis.agents.specialists import refresh_open_destinations
+    refresh_open_destinations(conn)
     return integration_view(conn, acct["id"])
 
 
@@ -187,7 +189,9 @@ def set_calendars(conn, read_ids: list[str], write_target: str | None) -> dict:
         else:
             A.set_grants(conn, acct["id"], "calendar", "write", [])
     from jarvis.agents import context
+    from jarvis.agents.specialists import refresh_open_destinations
     context.invalidate()
+    refresh_open_destinations(conn)
     return integration_view(conn, acct["id"])
 
 

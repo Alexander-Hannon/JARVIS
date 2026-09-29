@@ -1,5 +1,27 @@
 # BUILD_STATUS
 
+## Session 2 update (2026-09-29): fixes from AJ's first real use
+- **Command splitting:** "Hey/Yo/OK Jarvis" greetings are stripped. "then", "after that" and mid-sentence lead-ins ("remind me to", "I also need to", "I want you to…") always start a new task. Trailing "thanks/please" is dropped. 9 regression tests in `tests/test_splitting.py`.
+- **Unclickable checkbox:** the cause was that no Todoist destination project was chosen. Cards now show a "One step left" project picker. Choosing a project (here or in Settings) re-resolves open plans into a new version with the checkboxes unlocked. Tested.
+- **Google OAuth:** the callback no longer needs the SameSite=Strict session cookie. It uses the single-use state plus a Lax browser-binding cookie. Tested.
+- **Jarvis voice:**
+  - Local neural TTS (Piper) with British male presets and an optional subtle "HUD" effect, served by `POST /api/voice/tts`.
+  - A pronunciation lexicon handles Todoist, IS/MSC course codes, GTA and CCM.
+  - Measured on this host: 0.27 s warm and ~1.1 s cold per sentence. The output round-trips through local STT at 0.94 confidence.
+  - Falls back to browser voices automatically.
+  - These are generic open voices, not a clone of any actor.
+- **Seamless voice:**
+  - One tap, speak, pause: silence detection stops the recording, transcribes it and sends it with no second click.
+  - Hold still works as push-to-talk.
+  - Review mode is available via the "Send automatically" toggle, and turns on automatically when STT confidence is low.
+- **HUD UI:** cyan holographic theme, clipped-corner panels, arc-reactor mic that reacts to your voice level, live clock, and a *real* worker-heartbeat indicator. Bundled fonts (no Google Fonts requests). Reduced-motion respected.
+- **Mobile fixes:**
+  - The sticky header no longer covers items when scrolling to them.
+  - The bottom nav stays above the panels.
+  - The HUD type no longer overflows phone width.
+- **Tests:** backend 218 passed; UI (mocked) 15 passed; real-backend browser test 1 passed (a single tap, then auto-stop on silence and auto-send); ruff clean.
+
+
 _Last updated: 2026-09-28, end of build session 1_
 
 ## Environment (inspected)

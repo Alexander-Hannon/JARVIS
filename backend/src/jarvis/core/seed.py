@@ -51,7 +51,8 @@ COURSE_SUGGESTIONS = [
 ]
 
 DEFAULT_SETTINGS = {
-    "voice": {"voice_name": None, "rate": 1.05, "muted": False, "auto_speak": True},
+    "voice": {"voice_name": None, "rate": 1.05, "muted": False, "auto_speak": True, "tts_engine": "jarvis",
+              "tts_preset": "jarvis", "auto_send": True},
     "privacy": {"retain_audio": False},
     "notifications": {"lock_screen_details": False, "push_kinds": {"briefing": True, "action_result": False}},
     "budget": {"paid_inference_enabled": False, "background_paid_enabled": False, "daily_limit_usd": None,

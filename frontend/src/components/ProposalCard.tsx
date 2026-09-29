@@ -461,6 +461,14 @@ export function ProposalCard({ proposal: initial, onChanged, onCorrection }: Pro
         </div>
       )}
 
+      {isOpen && !expired && p.items.some((it) => it.missing_fields.some((m) => /Todoist project/i.test(m))) && (
+        <DestinationPicker
+          onChosen={async () => {
+            update(await api.proposal(p.id));
+          }}
+        />
+      )}
+
       <ol className="items">
         {p.items.map((it) => {
           const canSelect = selectable(it);
@@ -533,5 +541,59 @@ export function ProposalCard({ proposal: initial, onChanged, onCorrection }: Pro
         </footer>
       )}
     </article>
+  );
+}
+
+
+/** Inline fix for "no Todoist destination chosen": pick the project here instead of hunting through Settings. */
+function DestinationPicker({ onChosen }: { onChosen: () => Promise<void> }) {
+  const [projects, setProjects] = useState<{ id: string; name: string }[] | null>(null);
+  const [choice, setChoice] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    api.todoistProjects().then(
+      (ps) => {
+        setProjects(ps);
+        if (ps.length) setChoice(ps[0].id);
+      },
+      (e) => setErr(errorMessage(e)),
+    );
+  }, []);
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.todoistTarget(choice);
+      await onChosen();
+    } catch (e) {
+      setErr(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="dest-picker" role="group" aria-label="Choose Todoist project">
+      <p>
+        <strong>One step left:</strong> choose which Todoist project Jarvis may add tasks to. You can change it later in Settings.
+      </p>
+      {projects === null && !err ? (
+        <p className="muted small">Loading your Todoist projects…</p>
+      ) : (
+        <div className="dest-row">
+          <select aria-label="Todoist project" value={choice} onChange={(e) => setChoice(e.target.value)} disabled={busy || !projects?.length}>
+            {(projects ?? []).map((pr) => (
+              <option key={pr.id} value={pr.id}>
+                {pr.name}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="btn btn-primary" onClick={() => void save()} disabled={busy || !choice}>
+            {busy ? 'Saving…' : 'Use this project'}
+          </button>
+        </div>
+      )}
+      {err && <p className="bad-text small">{err}</p>}
+    </div>
   );
 }
