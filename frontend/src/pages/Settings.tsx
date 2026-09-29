@@ -18,6 +18,13 @@ const SECTIONS = [
 ] as const;
 type Key = (typeof SECTIONS)[number]['key'];
 
+const CONNECT_ERRORS: Record<string, string> = {
+  bad_state: 'That Google sign-in link expired or was already used. Click Connect again.',
+  wrong_browser: 'Finish the Google connection in the same browser where you clicked Connect.',
+  denied: 'Google access was not granted (cancelled or blocked). Click Connect to try again.',
+  token_exchange_failed: 'Google rejected the sign-in code. Check the client ID/secret in .env, restart Jarvis, and try again.',
+};
+
 export function SettingsPage({ onLoggedOut }: { onLoggedOut: () => void }) {
   const loc = useLocation();
   const nav = useNavigate();
@@ -26,6 +33,18 @@ export function SettingsPage({ onLoggedOut }: { onLoggedOut: () => void }) {
   useEffect(() => {
     if (SECTIONS.some((s) => s.key === fromHash)) setSection(fromHash);
   }, [fromHash]);
+  // Result of an OAuth round-trip (?connected=google / ?connect_error=code), shown once.
+  const [oauthResult] = useState(() => {
+    const q = new URLSearchParams(loc.search);
+    const ok = q.get('connected');
+    const err = q.get('connect_error');
+    return ok ? { ok: true, text: `${ok === 'google' ? 'Google' : ok} connected. Now choose which calendars to read and the one calendar Jarvis may write to.` }
+      : err ? { ok: false, text: CONNECT_ERRORS[err] ?? `Connection failed (${err}). Try Connect again.` } : null;
+  });
+  useEffect(() => {
+    if (loc.search) nav({ search: '', hash: 'integrations' }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const go = (k: Key) => {
     setSection(k);
     nav({ hash: k }, { replace: true });
@@ -55,6 +74,11 @@ export function SettingsPage({ onLoggedOut }: { onLoggedOut: () => void }) {
           ))}
         </nav>
         <div className="settings-body">
+          {oauthResult && (
+            <p role={oauthResult.ok ? 'status' : 'alert'} className={oauthResult.ok ? 'ok-text' : 'bad-text'}>
+              {oauthResult.text}
+            </p>
+          )}
           {section === 'integrations' && <IntegrationsSection />}
           {section === 'voice' && <VoiceSection />}
           {section === 'schedules' && <SchedulesSection />}
