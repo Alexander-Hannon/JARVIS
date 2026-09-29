@@ -105,7 +105,8 @@ def redirect_uri() -> str:
     return base.rstrip("/") + "/api/integrations/google/callback"
 
 
-def google_start(conn, purpose: str) -> str:
+def google_start(conn, purpose: str) -> tuple[str, str]:
+    """Returns (auth_url, browser_binding). The caller sets the binding as a short-lived Lax cookie."""
     from jarvis.integrations.google_oauth import CALENDAR_SCOPES, DRIVE_SCOPES, build_auth_url, generate_pkce_pair
     s = get_settings()
     if not (s.google_client_id and s.google_client_secret):
@@ -114,26 +115,35 @@ def google_start(conn, purpose: str) -> str:
         raise SetupError("bad_purpose", "purpose must be calendar or drive")
     state = pysecrets.token_urlsafe(32)
     verifier, challenge = generate_pkce_pair()
+    binding = pysecrets.token_urlsafe(32)
     ru = redirect_uri()
-    conn.execute("INSERT INTO oauth_states (state_hash, provider, purpose, code_verifier, redirect_uri, created_at, expires_at) "
-                 "VALUES (?,?,?,?,?,?,?)", (hashlib.sha256(state.encode()).hexdigest(), "google", purpose, verifier, ru,
-                                            now_iso(), iso(utcnow() + timedelta(minutes=10))))
+    conn.execute("INSERT INTO oauth_states (state_hash, provider, purpose, code_verifier, redirect_uri, created_at, expires_at, "
+                 "binding_hash) VALUES (?,?,?,?,?,?,?,?)",
+                 (hashlib.sha256(state.encode()).hexdigest(), "google", purpose, verifier, ru, now_iso(),
+                  iso(utcnow() + timedelta(minutes=10)), hashlib.sha256(binding.encode()).hexdigest()))
     scopes = CALENDAR_SCOPES if purpose == "calendar" else DRIVE_SCOPES
-    return build_auth_url(s.google_client_id, ru, scopes, state, challenge)
+    return build_auth_url(s.google_client_id, ru, scopes, state, challenge), binding
 
 
-def google_callback(conn, state: str, code: str | None, error: str | None) -> dict:
+def google_callback(conn, state: str, code: str | None, error: str | None, binding: str | None = None) -> dict:
     from jarvis.integrations.google_oauth import exchange_code, fetch_userinfo
     h = hashlib.sha256((state or "").encode()).hexdigest()
     st = row(conn, "SELECT * FROM oauth_states WHERE state_hash=?", (h,))
     if not st or st["used_at"] or parse_iso(st["expires_at"]) < utcnow() or st["provider"] != "google":
         raise SetupError("bad_state", "OAuth state is invalid, reused or expired. Start the connection again.")
+    import hmac
+    if not binding or not st["binding_hash"] or not hmac.compare_digest(
+            hashlib.sha256(binding.encode()).hexdigest(), st["binding_hash"]):
+        raise SetupError("wrong_browser", "Finish the connection in the same browser where you clicked Connect.")
     conn.execute("UPDATE oauth_states SET used_at=? WHERE state_hash=?", (now_iso(), h))
     if error or not code:
         raise SetupError("denied", f"Google returned: {error or 'no code'}")
     s = get_settings()
-    tokens = exchange_code(s.google_client_id, s.google_client_secret, st["redirect_uri"], code, st["code_verifier"])
-    info = fetch_userinfo(tokens["access_token"])
+    try:
+        tokens = exchange_code(s.google_client_id, s.google_client_secret, st["redirect_uri"], code, st["code_verifier"])
+        info = fetch_userinfo(tokens["access_token"])
+    except ProviderError as e:
+        raise SetupError("token_exchange_failed", f"Google token exchange failed ({e.kind}).") from e
     existing = A.get_account(conn, "google")
     purposes = set(existing["config"].get("purposes", [])) if existing and existing["external_account_id"] == info.get("email") else set()
     purposes.add(st["purpose"])

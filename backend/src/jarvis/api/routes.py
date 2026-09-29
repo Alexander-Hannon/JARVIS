@@ -89,16 +89,24 @@ def auth_pair(body: PairIn, response: Response, conn=Depends(db)):
 
 @public.get("/integrations/google/callback")
 def google_callback(request: Request, state: str = "", code: str | None = None, error: str | None = None, conn=Depends(db)):
-    # The browser returns here via top-level navigation; require the owner's session cookie as well as a valid state.
-    if not auth.session_from_request(conn, request):
-        raise HTTPException(401, "Sign in to Jarvis in this browser, then connect again.")
+    # Google returns via a cross-site top-level redirect, so the SameSite=Strict session cookie is NOT sent here.
+    # Authorization = unguessable single-use state (10 min, PKCE verifier held server-side) + the Lax binding
+    # cookie that only the owner's authenticated session could have obtained from /google/start.
     from jarvis.integrations.service import SetupError
     from jarvis.integrations.service import google_callback as cb
+    resp_err = None
     try:
-        cb(conn, state, code, error)
-        return RedirectResponse("/settings?connected=google", status_code=303)
+        cb(conn, state, code, error, request.cookies.get(OAUTH_BINDING_COOKIE))
+        resp = RedirectResponse("/settings?connected=google", status_code=303)
     except SetupError as e:
-        return RedirectResponse(f"/settings?connect_error={e.code}", status_code=303)
+        resp_err = e.code
+        resp = RedirectResponse(f"/settings?connect_error={resp_err}", status_code=303)
+    resp.delete_cookie(OAUTH_BINDING_COOKIE, path=OAUTH_CALLBACK_PATH)
+    return resp
+
+
+OAUTH_BINDING_COOKIE = "jarvis_oauth_binding"
+OAUTH_CALLBACK_PATH = "/api/integrations/google/callback"
 
 
 # ================================================================ auth (session)
@@ -830,13 +838,17 @@ class PurposeIn(BaseModel):
 
 
 @router.post("/integrations/google/start")
-def google_start(body: PurposeIn, conn=Depends(db)):
+def google_start(body: PurposeIn, response: Response, conn=Depends(db)):
     from jarvis.integrations.service import SetupError
     from jarvis.integrations.service import google_start as gs
     try:
-        return {"auth_url": gs(conn, body.purpose)}
+        url, binding = gs(conn, body.purpose)
     except SetupError as e:
         _serr(e)
+    # Lax (not Strict) so the browser sends it on the redirect back from Google; scoped to the callback path only.
+    response.set_cookie(OAUTH_BINDING_COOKIE, binding, httponly=True, samesite="lax", secure=get_settings().remote_mode,
+                        max_age=600, path=OAUTH_CALLBACK_PATH)
+    return {"auth_url": url}
 
 
 @router.get("/integrations/google/calendars")

@@ -89,12 +89,43 @@ def test_google_oauth_state_validation(client, conn, monkeypatch):
     q = parse_qs(urlsplit(url).query)
     assert q["code_challenge_method"] == ["S256"] and q["redirect_uri"][0].endswith("/api/integrations/google/callback")
     assert "calendar.events.owned" in q["scope"][0] and "https://www.googleapis.com/auth/calendar " not in q["scope"][0] + " "
-    # forged / unknown state is refused, and the callback requires the owner's session
+    # forged / unknown state is refused
     r = client.c.get("/api/integrations/google/callback?state=forged&code=abc", follow_redirects=False)
     assert r.status_code == 303 and "connect_error=bad_state" in r.headers["location"]
+
+
+def test_google_callback_works_without_strict_session_cookie(client, conn, monkeypatch):
+    """Regression: Google's cross-site redirect doesn't carry the SameSite=Strict session cookie.
+    The callback must succeed with state + Lax binding cookie, and refuse other browsers."""
+    monkeypatch.setenv("JARVIS_GOOGLE_CLIENT_ID", "cid.apps.googleusercontent.com")
+    monkeypatch.setenv("JARVIS_GOOGLE_CLIENT_SECRET", "test-secret")
+    from urllib.parse import parse_qs, urlsplit
+
     from fastapi.testclient import TestClient
-    anon = TestClient(client.c.app)
-    assert anon.get(f"/api/integrations/google/callback?state={q['state'][0]}&code=abc", follow_redirects=False).status_code == 401
+
+    from jarvis.config import reset_settings_cache
+    from jarvis.integrations import google_oauth
+    reset_settings_cache()
+    monkeypatch.setattr(google_oauth, "exchange_code", lambda *a, **k: {"access_token": "at", "refresh_token": "rt",
+                                                                        "expires_at": 9e9, "scope": "openid email"})
+    monkeypatch.setattr(google_oauth, "fetch_userinfo", lambda *a, **k: {"email": "aj@uah.example"})
+    start = client.post("/api/integrations/google/start", {"purpose": "calendar"})
+    state = parse_qs(urlsplit(start.json()["auth_url"]).query)["state"][0]
+    binding = start.cookies.get("jarvis_oauth_binding")
+    assert binding
+    # a different browser (no binding cookie, no session) is refused
+    other = TestClient(client.c.app)
+    r = other.get(f"/api/integrations/google/callback?state={state}&code=abc", follow_redirects=False)
+    assert "connect_error=wrong_browser" in r.headers["location"]
+    # same browser, session cookie withheld (as with a cross-site redirect) — succeeds
+    same = TestClient(client.c.app, cookies={"jarvis_oauth_binding": binding})
+    r = same.get(f"/api/integrations/google/callback?state={state}&code=abc", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/settings?connected=google"
+    acct = conn.execute("SELECT label, config, secret_ciphertext FROM integration_accounts WHERE provider='google'").fetchone()
+    assert acct["label"] == "aj@uah.example" and b"rt" not in acct["secret_ciphertext"]
+    # replaying the same state is refused
+    r = same.get(f"/api/integrations/google/callback?state={state}&code=abc", follow_redirects=False)
+    assert "connect_error=bad_state" in r.headers["location"]
 
 
 def test_calendar_write_target_must_be_owned(client, fakes, conn):
