@@ -19,6 +19,7 @@ def main(argv: list[str] | None = None) -> None:
     tr.add_argument("path")
     sub.add_parser("gen-vapid", help="Generate Web Push VAPID keys for .env")
     sub.add_parser("setup-key", help="Create the token-encryption key file if missing")
+    sub.add_parser("reset-password", help="Set a new owner password (local shell only) and sign out all devices")
     sub.add_parser("backup", help="Create a backup")
     rs = sub.add_parser("restore", help="Restore a backup (neutralizes jobs/approvals, disables schedules)")
     rs.add_argument("backup_id")
@@ -65,6 +66,22 @@ def main(argv: list[str] | None = None) -> None:
         from jarvis.security.secrets import ensure_key, key_status
         ensure_key()
         print(key_status())
+    elif a.cmd == "reset-password":
+        import getpass
+
+        from jarvis.core.db import connection, tx
+        from jarvis.core.util import audit, now_iso
+        from jarvis.security.auth import hash_password
+        pw = getpass.getpass("New owner password (12+ chars): ")
+        if len(pw) < 12 or pw != getpass.getpass("Repeat: "):
+            sys.exit("Passwords must match and be at least 12 characters.")
+        with connection() as conn, tx(conn):
+            if not conn.execute("SELECT 1 FROM owner WHERE id=1").fetchone():
+                sys.exit("No owner yet — open the app on this machine to set one up.")
+            conn.execute("UPDATE owner SET password_hash=? WHERE id=1", (hash_password(pw),))
+            conn.execute("UPDATE sessions SET revoked_at=? WHERE revoked_at IS NULL", (now_iso(),))
+            audit(conn, "user", "auth.password_reset", "Owner password reset from local CLI; all sessions revoked")
+        print("Password updated. All devices were signed out; re-pair your phone.")
     elif a.cmd == "backup":
         from jarvis.backup import create_backup
         print(json.dumps(create_backup("cli"), indent=2))

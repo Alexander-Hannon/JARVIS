@@ -1,5 +1,7 @@
 # JARVIS
 
+> **New here? Start with [GETTING_STARTED.md](GETTING_STARTED.md)** — a step-by-step setup and usage guide.
+
 AJ Hannon's personal, voice-first operator. The core loop is **speak or type → local transcription → interpretation → proposal → approval → execution with a real adapter → read-back verification → receipt**. Briefings, memory, knowledge and local-file features are built on the same persistent state.
 
 - Spec: `JARVIS_BUILD_SPEC.md`
