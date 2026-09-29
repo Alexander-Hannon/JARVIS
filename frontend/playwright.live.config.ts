@@ -8,7 +8,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 // with a FRESH data dir, plus `jarvis worker`. Chromium's fake capture device plays a real speech WAV into getUserMedia,
 // so the path browser mic → MediaRecorder → upload → local faster-whisper is exercised end to end.
 // Providers are not connected; the test asserts truthful "not connected" blockers instead of fake success.
-const wav = path.resolve(here, '../backend/tests/fixtures/audio/scenario1.wav');
+const wav = path.resolve(here, '../backend/tests/fixtures/audio/scenario1_padded.wav');
 export default defineConfig({
   testDir: './e2e-live',
   timeout: 120_000,

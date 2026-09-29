@@ -312,3 +312,36 @@ def area_summary(conn, area: str) -> str:
     if area in ("business", "coaching"):
         lines.append("Income, balances, client check-ins and bills only come from sources you supply; none are invented here.")
     return "\n".join(lines)
+
+
+# ------------------------------------------------------------------ re-resolve destinations after setup
+def refresh_open_destinations(conn) -> list[str]:
+    """After AJ picks a Todoist project / write calendar, re-resolve open (unapproved) proposals whose items were
+    blocked only by the missing destination. Each changed proposal gets a new version (approval still required)."""
+    from jarvis.actions import proposals as P
+    from jarvis.agents.interpret import detect_area
+    changed = []
+    for r in rows(conn, "SELECT id FROM proposals WHERE status='proposed'"):
+        pv = P.current_version(conn, r["id"])
+        acts = P.actions_for_version(conn, pv["pv"]["id"])
+        if not any(a["missing_fields"] for a in acts):
+            continue
+        specs = P.specs_from_actions(acts)
+        dirty = False
+        for sp in specs:
+            if sp.action_type == "task.create" and sp.missing_fields:
+                aid, pid, pname, missing = todoist_target(conn, detect_area(sp.args.get("content", "")))
+                if pid and (pid, missing) != (sp.target_resource, sp.missing_fields):
+                    sp.account_id, sp.target_resource, sp.target_name, sp.missing_fields = aid, pid, pname, missing
+                    sp.args["project_id"] = pid
+                    sp.expected_effect = re.sub(r" in [^“”]*$", "", sp.expected_effect) + f" in {pname}"
+                    dirty = True
+            elif sp.action_type == "event.create" and sp.missing_fields:
+                aid, cal, cname, _reads, missing = calendar_target(conn)
+                if cal:
+                    sp.account_id, sp.target_resource, sp.target_name, sp.missing_fields = aid, cal, cname, missing
+                    dirty = True
+        if dirty:
+            P.revise(conn, r["id"], specs, "Destination chosen in Settings", actor="user")
+            changed.append(r["id"])
+    return changed

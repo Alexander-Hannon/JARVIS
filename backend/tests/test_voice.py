@@ -131,3 +131,15 @@ def test_s1_real_audio_end_to_end_with_voice_correction_and_approval(client, fak
     assert {t.due["date"][:10] for t in fakes["todoist"].list_tasks()} == {"2026-09-29", "2026-10-02", "2026-09-28"}
     lat = client.get("/api/metrics/latency").json()
     assert lat["transcription"]["count"] == 3 and lat["execution"]["count"] == 3
+
+
+@pytest.mark.slow
+def test_local_jarvis_tts_is_intelligible(client):
+    """Local Piper TTS: returns WAV and round-trips through local STT (the HUD effect must not hurt clarity)."""
+    st = client.get("/api/voice/tts/status").json()
+    assert st["local_only"] and any(p["key"] == "jarvis" for p in st["presets"])
+    r = client.post("/api/voice/tts", {"text": "Two tasks are ready for Todoist. Shall I add them?", "preset": "jarvis"})
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/wav" and r.content[:4] == b"RIFF"
+    from jarvis.voice.stt import decode_audio, get_engine
+    t = get_engine().transcribe(decode_audio(r.content))
+    assert "tasks" in t.text.lower() and "ready" in t.text.lower() and "add them" in t.text.lower()

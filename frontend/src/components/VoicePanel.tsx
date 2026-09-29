@@ -63,6 +63,25 @@ export function VoicePanel({ focusTyped, retainAudio }: { focusTyped: () => void
 
   const capability = micCapabilityProblem();
 
+  // Seamless mode: tap once, speak, pause — Jarvis stops, transcribes and sends on its own.
+  const [autoSend, setAutoSendState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('jarvis.autoSend') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const autoSendRef = useRef(autoSend);
+  autoSendRef.current = autoSend;
+  const setAutoSend = (v: boolean) => {
+    setAutoSendState(v);
+    try {
+      localStorage.setItem('jarvis.autoSend', String(v));
+    } catch {
+      /* ignore */
+    }
+  };
+
   useEffect(() => {
     if (phase !== 'recording') return;
     const id = window.setInterval(() => setElapsed(recorder.current?.elapsedMs ?? 0), 200);
@@ -112,8 +131,11 @@ export function VoicePanel({ focusTyped, retainAudio }: { focusTyped: () => void
         setDraft(d);
         setPhase('review');
         const conf = capture.transcript?.confidence;
-        if (d.handsFree && d.text.trim() && (conf === null || conf === undefined || conf >= LOW_CONFIDENCE)) {
+        const confident = conf === null || conf === undefined || conf >= LOW_CONFIDENCE;
+        if ((d.handsFree || autoSendRef.current) && d.text.trim() && confident) {
           await sendDraft(d);
+        } else if (!confident && autoSendRef.current && !d.handsFree) {
+          setHfNote('I may have misheard — check the transcript, then send.');
         } else if (d.handsFree) {
           setHfNote('Low-confidence transcript — review it before sending. Hands-free listening resumes after you send or discard.');
         }
@@ -157,15 +179,21 @@ export function VoicePanel({ focusTyped, retainAudio }: { focusTyped: () => void
         await rec.start({
           onAutoStop: (r) => void upload(r),
           onStream: (stream) => {
-            if (opts.handsFree && SilenceDetector.supported()) {
+            if (SilenceDetector.supported()) {
               const det = new SilenceDetector({
-                silenceMs: 1500,
+                silenceMs: opts.handsFree ? 1500 : 1200,
+                noSpeechTimeoutMs: opts.handsFree ? 12000 : 8000,
                 onLevel: (l) => setLevel(l),
-                onSilence: () => void stop(),
+                // Tap mode ends on a natural pause; while the button is being HELD the user decides when to stop.
+                onSilence: () => {
+                  if (holdStart.current === null) void stop();
+                },
                 onNoSpeech: () => {
+                  if (holdStart.current !== null) return;
                   recorder.current?.cancel();
                   stopVad();
                   setPhase('idle');
+                  if (!opts.handsFree) setHfNote("I didn't catch anything — tap and speak again.");
                 },
               });
               det.start(stream);
@@ -360,6 +388,7 @@ export function VoicePanel({ focusTyped, retainAudio }: { focusTyped: () => void
           aria-pressed={recording}
           aria-label={recording ? 'Stop recording and transcribe' : 'Record voice command (tap to start, or hold to talk)'}
           data-testid="record-btn"
+          style={{ ['--lvl' as string]: recording ? Math.min(1, level * 12) : 0 }}
           disabled={!!capability || busy || !!hf}
           onPointerDown={onPointerDown}
           onPointerUp={onPointerUp}
@@ -367,10 +396,12 @@ export function VoicePanel({ focusTyped, retainAudio }: { focusTyped: () => void
           onContextMenu={(e) => e.preventDefault()}
           onClick={onClick}
         >
-          <span className="record-icon" aria-hidden="true">
-            {recording ? '■' : '●'}
+          <span className="record-icon reactor" aria-hidden="true">
+            <span className="reactor-ring r1" />
+            <span className="reactor-ring r2" />
+            <span className="reactor-core">{recording ? '■' : ''}</span>
           </span>
-          <span className="record-label">{recording ? 'Tap to stop' : phase === 'starting' ? 'Starting mic…' : 'Tap or hold to talk'}</span>
+          <span className="record-label">{recording ? 'Listening…' : phase === 'starting' ? 'Starting mic…' : busy ? 'Working…' : 'Tap to speak'}</span>
         </button>
 
         <div className="voice-status" aria-live="polite" data-testid="voice-status">
@@ -378,13 +409,22 @@ export function VoicePanel({ focusTyped, retainAudio }: { focusTyped: () => void
             <div className="rec-state">
               <span className="rec-dot" aria-hidden="true" /> Recording <strong className="timer">{fmtElapsed(elapsed)}</strong>
               <span className="muted"> / {fmtElapsed(MAX_RECORDING_S * 1000)} max</span>
-              {hf && <span className="level" style={{ ['--lvl' as string]: Math.min(1, level * 12) }} aria-hidden="true" />}
+              <span className="level" style={{ ['--lvl' as string]: Math.min(1, level * 12) }} aria-hidden="true" />
             </div>
           )}
           {phase === 'uploading' && <span>Uploading audio…</span>}
           {phase === 'transcribing' && <span>Transcribing locally…</span>}
           {phase === 'sending' && <span>Sending command…</span>}
-          {phase === 'idle' && !err && !hf && <span className="muted hide-mobile">Hold to talk, or tap once to start and again to stop.</span>}
+          {phase === 'idle' && !err && !hf && (
+            <span className="muted hide-mobile">
+              {autoSend ? 'Tap, speak, and pause — Jarvis stops listening and acts on it.' : 'Tap, speak, pause — then review the transcript before sending.'}
+            </span>
+          )}
+          {phase === 'idle' && !hf && (
+            <label className="auto-send small">
+              <input type="checkbox" checked={autoSend} onChange={(e) => setAutoSend(e.target.checked)} /> Send automatically
+            </label>
+          )}
           {micDisabledReason && !hf && <span className="warn-text">{micDisabledReason}</span>}
         </div>
 

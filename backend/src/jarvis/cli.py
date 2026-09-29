@@ -17,6 +17,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("stt-warmup", help="Download/load the local STT model and measure warm-up")
     tr = sub.add_parser("transcribe", help="Transcribe an audio file locally (diagnostic)")
     tr.add_argument("path")
+    sub.add_parser("tts-download", help="Download the local Jarvis voice models (Piper, ~200 MB)")
     sub.add_parser("gen-vapid", help="Generate Web Push VAPID keys for .env")
     sub.add_parser("setup-key", help="Create the token-encryption key file if missing")
     sub.add_parser("reset-password", help="Set a new owner password (local shell only) and sign out all devices")
@@ -52,6 +53,13 @@ def main(argv: list[str] | None = None) -> None:
         t = get_engine().transcribe(d)
         print(json.dumps({"text": t.text, "confidence": t.confidence, "latency_ms": t.latency_ms, "audio_s": t.duration_s,
                           "format": d.source_format, "model": t.model}, indent=2))
+    elif a.cmd == "tts-download":
+        from jarvis.voice.tts import PRESETS, download, model_available
+        for m in sorted({p.model for p in PRESETS.values()}):
+            if not model_available(m):
+                print(f"downloading {m} …")
+                download(m)
+            print(f"ready: {m}")
     elif a.cmd == "gen-vapid":
         import base64
 

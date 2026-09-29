@@ -158,6 +158,29 @@ def voice_warmup(conn=Depends(db)):
     return st | {"hardware": hardware_profile()}
 
 
+@router.get("/voice/tts/status")
+def tts_status():
+    from jarvis.voice.tts import get_tts
+    return get_tts().status()
+
+
+class TTSIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    preset: str = "jarvis"
+
+
+@router.post("/voice/tts")
+def tts(body: TTSIn, conn=Depends(db)):
+
+    from jarvis.voice.tts import TTSUnavailable, get_tts
+    try:
+        wav = get_tts().synthesize(body.text, body.preset)
+    except TTSUnavailable as e:
+        raise HTTPException(503, {"code": "tts_unavailable", "message": str(e)}) from e
+    record_latency(conn, "tts", get_tts().last_ms or 0, {"preset": body.preset, "chars": len(body.text)})
+    return Response(content=wav, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+
 class VoiceSessionIn(BaseModel):
     mode: str = "push_to_talk"
     conversation_id: str | None = None

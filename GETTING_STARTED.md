@@ -121,6 +121,16 @@ The first run downloads about **142 MB** and takes a minute or two. It prints yo
 
 ✅ **Check:** output includes `"state": "ready"`.
 
+### Step 2.7 — Download Jarvis's voice
+
+```bash
+uv run jarvis tts-download
+```
+
+This downloads the local voice models (about **200 MB**) that give Jarvis its refined British delivery. They run on your machine, so nothing you hear is generated in the cloud.
+
+✅ **Check:** it prints `ready:` for each voice.
+
 ---
 
 ## Part 3 — Start Jarvis
@@ -175,18 +185,32 @@ You'll see **"Set up your owner password."** Choose a password of **12+ characte
 
 ### Step 4.4 — Try your first voice command
 
-1. Tap the record button and say:
-   > *"I need to grade IS 640 homework tomorrow, follow up with the iFlex lead Thursday, and buy groceries tonight."*
-2. Tap **Stop & transcribe**.
-3. Your words appear in an **editable box**. Fix anything that's wrong, then click **Send as command**.
+1. Tap the glowing mic **once** and say:
+   > *"Hey Jarvis, I need to grade IS 640 homework tomorrow, follow up with the iFlex lead Thursday, and buy groceries tonight."*
+2. **Just stop talking.** After about a second of silence Jarvis stops listening, transcribes locally, and acts on it. There's no second button to press.
 
-✅ **Check:** Jarvis shows **3 tasks ready for Todoist** with the right dates, plus a note that **Todoist isn't connected yet** — that's expected. Nothing has been written anywhere.
+✅ **Check:** Jarvis shows **3 separate tasks** with the right dates (the "Hey Jarvis" greeting is ignored). Nothing has been written anywhere yet; tasks are only added after you approve.
+
+> Want to review the words before they're sent? Untick **Send automatically** under the mic. Jarvis will then show an editable transcript with a **Send as command** button. It also does this on its own whenever it isn't confident it heard you correctly.
+>
+> Typing works everywhere too: use the text box under the microphone.
 
 > Typing works everywhere too: use the text box under the microphone.
 
 ### Step 4.5 — Pick a voice for spoken replies
 
-Go to **Settings → Voice → Speech output**, choose a voice, and adjust the speed. You can mute Jarvis any time with **Mute voice** on the Command page.
+Jarvis speaks with its own local voice by default: **"Jarvis — refined British"**. To change it, go to **Settings → Voice → Speech output**:
+
+| Voice | Sound |
+|---|---|
+| **Jarvis — refined British** (default) | Calm, measured British male with a subtle synthetic "HUD" sheen |
+| Jarvis — no effect | Same voice, clean |
+| Obadiah — deep British | Deeper British male |
+| Northern English male | Warmer regional British |
+
+Press **Test voice** to hear it, and adjust **Rate** if you want it faster. You can mute Jarvis any time with **Mute voice** on the Command page. When you tap the mic, Jarvis stops talking so it never hears itself.
+
+> These are open synthetic voices, not a copy of the movie actor's voice. Browser voices are still listed as a fallback.
 
 ---
 
@@ -349,8 +373,10 @@ Your phone can't reach `localhost` on your laptop, so you need a private HTTPS l
 
 ### Talking to Jarvis
 
-- **Tap** the mic to start and tap again to stop, or **hold** to talk and release.
-- Check the transcript, fix anything, then **Send as command**.
+- **Tap once and talk.** Pause for about a second when you're done and Jarvis sends it automatically.
+- **Hold** the mic for push-to-talk instead; it sends when you let go.
+- Say several things in one go ("…and then remind me to…", "…I also need to…"). Each one becomes its own task.
+- If it misheard, just say the fix ("change Thursday to Friday", "remove the groceries one").
 - Or just type.
 
 ### Things you can say
@@ -426,6 +452,8 @@ Jarvis **cannot**: send emails/texts/Slack, send calendar invites, buy anything,
 | "Speech-to-text unavailable" | Run `uv run jarvis stt-warmup`; it needs internet the first time to download the model. |
 | Transcripts are often wrong | Speak a bit slower and closer to the mic. For better accuracy, set `JARVIS_STT_MODEL=small.en` in `.env` (bigger download, slower). |
 | "Approve" by voice isn't accepted | Jarvis wasn't confident it heard you — tap **Approve**, or lower `JARVIS_STT_MIN_CONFIDENCE` (default 0.55) in `.env`. |
+| A task's checkbox can't be ticked | Jarvis doesn't know which Todoist project to use yet. Pick one in the **"One step left"** box on the card (or Settings → Integrations → Todoist). The plan updates and the checkboxes unlock. |
+| Jarvis sounds robotic / uses a browser voice | Run `uv run jarvis tts-download`, restart `jarvis serve`, and pick a **Jarvis** voice in Settings → Voice. |
 | Approved items stay "Queued" | The worker isn't running — start Terminal 2 (`uv run jarvis worker`). Also check you haven't hit **Pause actions**. |
 | Google says `redirect_uri_mismatch` | The redirect URI in Google Cloud must be exactly `http://localhost:8765/api/integrations/google/callback`. |
 | Google says "Access blocked" | Add your Gmail as a **Test user** on the OAuth consent screen. |

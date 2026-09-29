@@ -106,7 +106,7 @@ def test_google_callback_works_without_strict_session_cookie(client, conn, monke
     from jarvis.config import reset_settings_cache
     from jarvis.integrations import google_oauth
     reset_settings_cache()
-    monkeypatch.setattr(google_oauth, "exchange_code", lambda *a, **k: {"access_token": "at", "refresh_token": "rt",
+    monkeypatch.setattr(google_oauth, "exchange_code", lambda *a, **k: {"access_token": "at", "refresh_token": "refresh-PLAINTEXT-4f9c2a",
                                                                         "expires_at": 9e9, "scope": "openid email"})
     monkeypatch.setattr(google_oauth, "fetch_userinfo", lambda *a, **k: {"email": "aj@uah.example"})
     start = client.post("/api/integrations/google/start", {"purpose": "calendar"})
@@ -122,7 +122,7 @@ def test_google_callback_works_without_strict_session_cookie(client, conn, monke
     r = same.get(f"/api/integrations/google/callback?state={state}&code=abc", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/settings?connected=google"
     acct = conn.execute("SELECT label, config, secret_ciphertext FROM integration_accounts WHERE provider='google'").fetchone()
-    assert acct["label"] == "aj@uah.example" and b"rt" not in acct["secret_ciphertext"]
+    assert acct["label"] == "aj@uah.example" and b"refresh-PLAINTEXT-4f9c2a" not in acct["secret_ciphertext"]
     # replaying the same state is refused
     r = same.get(f"/api/integrations/google/callback?state={state}&code=abc", follow_redirects=False)
     assert "connect_error=bad_state" in r.headers["location"]
@@ -170,3 +170,19 @@ def test_drive_selected_roots_only(client, conn):
         service.drive_ingest(conn, "doc2")
     hits = client.get("/api/search?q=clarity").json()
     assert hits and hits[0]["title"].startswith("Rubric")
+
+
+def test_choosing_todoist_project_unblocks_open_proposal(client, fakes, conn):
+    """Reported: checkbox couldn't be ticked because no destination project was chosen. Picking one fixes open plans."""
+    freeze(CHICAGO_AFTERNOON)
+    conn.execute("DELETE FROM scope_grants WHERE resource_type='todoist_project'")
+    r = client.post("/api/commands", {"text": "go grocery shopping today and then remind me to grade MSC 550 tomorrow",
+                                      "captured_at": "2026-09-28T20:00:00Z"}).json()
+    p = r["proposal"]
+    assert all(i["missing_fields"] for i in p["items"])
+    assert client.post("/api/integrations/todoist/target", {"project_id": "proj-jarvis"}).status_code == 200
+    v = client.get(f"/api/proposals/{p['id']}").json()
+    assert v["version"] == 2 and all(not i["missing_fields"] for i in v["items"])
+    assert all(i["args"]["project_id"] == "proj-jarvis" for i in v["items"])
+    ok = client.post(f"/api/proposals/{p['id']}/approve", {"version": 2, "hash": v["hash"], "selected_items": [0, 1]})
+    assert ok.status_code == 200

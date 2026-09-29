@@ -28,18 +28,27 @@ export function SpeechControls({ full = false }: { full?: boolean }) {
             Voice
           </label>
           <select id={vid} value={s.prefs.voiceName ?? ''} onChange={(e) => s.setPrefs({ voiceName: e.target.value || null })}>
-            <option value="">System default</option>
-            {voices.map((v) => (
-              <option key={v.name} value={v.name}>
-                {v.name} ({v.lang})
-              </option>
-            ))}
+            <optgroup label="Jarvis voices (local, private)">
+              {voices.filter((v) => v.label).map((v) => (
+                <option key={v.name} value={v.name}>
+                  {v.label}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Browser voices">
+              <option value="">System default</option>
+              {voices.filter((v) => !v.label).map((v) => (
+                <option key={v.name} value={v.name}>
+                  {v.name} ({v.lang})
+                </option>
+              ))}
+            </optgroup>
           </select>
           <label htmlFor={rid} className="small">
             Rate {s.prefs.rate.toFixed(1)}×
           </label>
           <input id={rid} type="range" min={0.6} max={1.6} step={0.1} value={s.prefs.rate} onChange={(e) => s.setPrefs({ rate: Number(e.target.value) })} />
-          <button type="button" className="btn btn-small" onClick={() => s.speak('This is how JARVIS will sound.')} disabled={s.prefs.muted}>
+          <button type="button" className="btn btn-small" onClick={() => s.speak('Good evening. All systems are online, and I am at your service.')} disabled={s.prefs.muted}>
             Test voice
           </button>
         </>
