@@ -3,7 +3,13 @@ Jarvis's own logic, not live provider success."""
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
+
+# Never load AJ's real .env (remote mode, API keys, OAuth secrets) into the test suite.
+os.environ["JARVIS_ENV_FILE"] = os.devnull
+for _k in [k for k in os.environ if k.startswith("JARVIS_") and k != "JARVIS_ENV_FILE"]:
+    del os.environ[_k]
 
 import pytest
 

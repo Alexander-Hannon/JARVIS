@@ -387,3 +387,12 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: 0.35; }
   .composer-wrap .record-btn { flex-direction: column; gap: 4px; }
   .composer-wrap .reactor { width: 76px; height: 76px; }
 }
+
+/* ---------- live "working" indicator ---------- */
+.thinking { display: flex; gap: 14px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--border);
+  background: rgba(0, 216, 255, 0.05); }
+.thinking strong { font-family: var(--display); letter-spacing: 0.14em; text-transform: uppercase; font-size: 0.72rem; color: var(--accent); }
+.thinking-line { font-family: var(--mono); font-size: 0.8rem; color: var(--text-2); }
+.thinking-core { width: 18px; height: 18px; margin-top: 2px; border-radius: 50%; flex: 0 0 auto;
+  background: radial-gradient(circle, #fff 0 20%, var(--accent) 45%, transparent 70%); box-shadow: var(--glow-strong); }
+@media (prefers-reduced-motion: no-preference) { .thinking-core { animation: hud-breathe 1.2s ease-in-out infinite; } }

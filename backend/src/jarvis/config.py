@@ -1,6 +1,7 @@
 """Runtime configuration. Secrets come from the environment or files outside the DB; never from git."""
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -12,7 +13,9 @@ REPO_ROOT = BACKEND_ROOT.parent
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="JARVIS_", env_file=str(REPO_ROOT / ".env"), extra="ignore")
+    # JARVIS_ENV_FILE lets tests/tools point at a different (or empty) settings file instead of AJ's real .env.
+    model_config = SettingsConfigDict(env_prefix="JARVIS_", env_file=os.environ.get("JARVIS_ENV_FILE", str(REPO_ROOT / ".env")),
+                                      extra="ignore")
 
     data_dir: Path = BACKEND_ROOT / "data"
     host: str = "127.0.0.1"

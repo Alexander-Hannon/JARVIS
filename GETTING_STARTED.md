@@ -380,6 +380,16 @@ Your phone can't reach `localhost` on your laptop, so you need a private HTTPS l
 - Ask for several different things at once. Jarvis answers each one in its own section (**Tasks**, **Calendar**, **Weather**…). Only the task part needs your approval.
 - Or just type.
 
+### How JARVIS thinks (V2)
+
+With an Anthropic key and a budget set (Part 7A), JARVIS reads each command, works out what you actually want, and picks the right tools. It can check your calendar, tasks, deadlines, weather, memory and documents, and **search the web and read pages** for research. You'll see what it's doing live ("Searching the web: …") while it works.
+
+It only proposes changes (tasks, calendar blocks, notes) when you ask for them. Nothing is added until you approve the card.
+
+**Cost:** a typical command costs roughly **$0.03–$0.15**, and each web search adds about $0.01. All of it counts against your daily limit. Check **Settings → Budget → JARVIS brain**: it shows "V2 reasoning online" or explains why it's offline, and has the switch for web research.
+
+Without a key or budget, JARVIS runs in **offline mode**. It can still capture tasks, answer calendar and weather questions, and give briefings, but it can't reason freely or research.
+
 ### Things you can say
 
 | You say | Jarvis does |

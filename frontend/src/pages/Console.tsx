@@ -237,9 +237,17 @@ export function ConsolePage() {
           return <ResponseView key={e.id} resp={e.resp} />;
         })}
         {conv.sending && (
-          <p className="muted" role="status">
-            Waiting for JARVIS…
-          </p>
+          <div className="thinking" role="status" aria-live="polite">
+            <span className="thinking-core" aria-hidden="true" />
+            <div>
+              <strong>JARVIS is working…</strong>
+              {conv.liveEvents.slice(-6).map((e, i) => (
+                <div key={i} className="thinking-line">
+                  › {e}
+                </div>
+              ))}
+            </div>
+          </div>
         )}
         <div ref={endRef} />
       </div>

@@ -88,6 +88,8 @@ export interface CommandRequest {
   tz: string;
   speech_playing: boolean;
   attachments?: string[];
+  /** Client-chosen run id so the UI can poll live progress while Jarvis works. */
+  client_run_id?: string;
 }
 
 export interface RunEvent {

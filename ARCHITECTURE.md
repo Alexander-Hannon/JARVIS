@@ -12,6 +12,24 @@ Browser/PWA (React)  ──HTTPS/loopback──▶  FastAPI (jarvis serve)  ─�
                                                                               └ ics_refresh / todoist_sync (hourly/15 min; no LLM polling)
 ```
 
+## V2 brain (agent loop)
+When an Anthropic key and budget are set, every command except approvals, "sounds good", cancels and plan corrections goes to `agents/agent.py`. Those four always stay deterministic.
+
+The agent loop:
+1. **System prompt:** Jarvis persona, current date and time, today's accepted mission, relevant memories, and which data sources are connected.
+2. **Tools:** 20 client tools (calendar, free time, tasks, deadlines, weather, memory, documents, GTA plan, briefings, GitHub, workspace files, and the `propose_*` tools), plus Anthropic server tools `web_search_20260209` and `web_fetch_20260209`. Web research can be switched off in Settings.
+3. **Loop:** up to 8 model steps, 14 tool calls and 120 s. It handles `pause_turn` and refusals, appends full response content each step (thinking and server-tool blocks round-trip unchanged), and uses automatic prompt caching.
+4. **Code-level rails:**
+   - `propose_*` tools only build `ActionSpec`s, which become ONE approval card.
+   - `when_phrase` must appear verbatim in AJ's message and is resolved by `timeparse`, so the model cannot invent a date.
+   - `save_memory` only works when AJ said "remember…".
+   - Tool, web and document text is labeled untrusted.
+   - There is no tool that approves, executes or deletes.
+5. **Budget:** each step reserves worst-case cost (tokens plus web searches at $0.01 each) and reconciles measured usage, including `server_tool_use.web_search_requests`. A budget or model error falls back to the offline router with a visible note.
+6. **Live progress:** the UI sends `client_run_id` and polls `/api/runs/{id}/events` while the agent works.
+
+Without a key or budget, the deterministic router below runs ("offline mode"). It no longer turns questions or look-ups into tasks.
+
 ## Command flow
 1. **Capture** — audio → `/api/captures/audio` (PyAV decode: WebM/Opus, MP4/AAC, Ogg, WAV, MP3; size ≤ 25 MB, ≤ 300 s) →
    local STT → `TranscriptVersion` (editable; edits create new versions). Raw audio is discarded unless AJ opts in.

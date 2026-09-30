@@ -1,5 +1,23 @@
 # BUILD_STATUS
 
+## Session 4 update (2026-09-30): JARVIS V2 — agentic brain
+- **Complaint:** commands defaulted to Todoist tasks. **Fix:** a Claude tool-use loop (`agents/agent.py`) now decides intent and picks tools, including web search and fetch. See ARCHITECTURE.md → "V2 brain".
+- **Safety rails in code:**
+  - Proposals only.
+  - Dates must be verbatim from AJ's words.
+  - No approve, execute or delete tools.
+  - Approvals, cancels and corrections bypass the model.
+  - Memory is saved only on "remember".
+  - Budget reservation per step, web searches included.
+- **Offline router:** "look up / research / find out / tell me…" are questions, never tasks.
+- **Live progress** in the UI while the agent works. The Settings "JARVIS brain" card shows the mode and has the web-research switch.
+- **Tests isolated from AJ's real `.env`:** his remote-mode setting had broken test logins.
+- **Evidence:**
+  - Backend: 237 passed, including 8 V2 tests with a scripted model. They cover tool routing, the invented-date rejection, web research with citations, approvals staying out of the model, the memory guard, budget fallback, and the offline no-task-default.
+  - UI (mocked): 15 passed. Real-backend browser tests: 2 passed, repeated twice.
+  - **Real API:** the exact V2 request (system prompt, 20 tools, web search/fetch definitions, `claude-opus-5-5`) was validated with the free `count_tokens` endpoint using AJ's key: valid, 9,900 input tokens.
+  - **Not yet run:** a live agent command, because it spends money. AJ's first command is the live test.
+
 ## Session 3 update (2026-09-29): multi-request commands
 - **Bug:** a sentence mixing a task, a calendar question and a weather question became three Todoist tasks. **Fix:**
   - `segment_utterance()` splits an utterance into separate requests and classifies each one.
