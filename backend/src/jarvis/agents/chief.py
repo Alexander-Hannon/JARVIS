@@ -16,7 +16,7 @@ from datetime import date, datetime
 from jarvis.actions import proposals as P
 from jarvis.agents import context as ctx
 from jarvis.agents import specialists as S
-from jarvis.agents.interpret import Commitment, Interpretation, classify
+from jarvis.agents.interpret import Commitment, Interpretation, classify, segment_utterance
 from jarvis.config import get_settings
 from jarvis.core import timeparse
 from jarvis.core.db import jdump, jload, row, rows, tx
@@ -42,7 +42,10 @@ class CommandInput:
 
 
 class Reply:
-    def __init__(self):
+    def __init__(self, defer: bool = False):
+        # defer=True (multi-request utterances): proposal specs are collected and merged into ONE plan at the end.
+        self.defer = defer
+        self.deferred: list[tuple] = []
         self.text_lines: list[str] = []
         self.spoken: str | None = None
         self.proposal_id: str | None = None
@@ -105,11 +108,16 @@ def handle(conn: sqlite3.Connection, inp: CommandInput) -> dict:
     captured = parse_iso(inp.captured_at)
     interp = classify(inp.text, has_active_proposal=bool(active), has_attachments=bool(inp.attachments),
                       captured_at=captured, tz=inp.tz)
-    run_event(conn, run_id, "route", f"Understood as: {interp.intent.replace('_', ' ')}")
+    parts = _plan_requests(inp, interp, bool(active), captured)
     reply = Reply()
     specialists: list[str] = []
     try:
-        _dispatch(conn, inp, interp, reply, run_id, active, captured, tv, specialists)
+        if len(parts) <= 1:
+            run_event(conn, run_id, "route", f"Understood as: {interp.intent.replace('_', ' ')}")
+            _dispatch(conn, inp, parts[0] if parts else interp, reply, run_id, active, captured, tv, specialists)
+        else:
+            interp = Interpretation("multi")
+            _dispatch_multi(conn, inp, parts, reply, run_id, active, captured, tv, specialists)
     except Exception as e:  # visible, recoverable failure — never fabricated success
         log.exception("command failed")
         reply.say(f"Something failed while handling that ({type(e).__name__}). Nothing was changed.")
@@ -118,7 +126,7 @@ def handle(conn: sqlite3.Connection, inp: CommandInput) -> dict:
     if reply.proposal_id:
         P.mark_presented(conn, reply.proposal_id)
     text = "\n".join(reply.text_lines).strip()
-    spoken = reply.spoken or _spoken(text)
+    spoken = speechify(reply.spoken or _spoken(text))
     mid = new_id("msg")
     conn.execute("INSERT INTO messages (id, conversation_id, role, text, spoken_text, capture_id, run_id, proposal_id, created_at) "
                  "VALUES (?,?,?,?,?,?,?,?,?)", (mid, inp.conversation_id, "assistant", text, spoken, inp.capture_id, run_id,
@@ -142,6 +150,160 @@ def handle(conn: sqlite3.Connection, inp: CommandInput) -> dict:
     if reply.proposal_id:
         record_latency(conn, "proposal", (time.perf_counter() - t0) * 1000)
     return resp
+
+
+SOLO_INTENTS = {"approve", "vague_consent", "cancel", "correct", "remove_item", "retrieve_actions", "remember",
+                "forget_memory", "meeting_debrief", "local_file", "knowledge", "summarize"}
+
+
+def _plan_requests(inp: CommandInput, whole: Interpretation, has_active: bool, captured: datetime) -> list[Interpretation]:
+    """One utterance may hold several different requests ("add a task…, give me my calendar, and the weather").
+    Split into requests and classify each; merge task captures into one. Approvals/corrections/etc. stay whole."""
+    if whole.intent in SOLO_INTENTS or inp.attachments:
+        return [whole]
+    segs = segment_utterance(inp.text)
+    if len(segs) <= 1:
+        return [whole]
+    parts = [classify(sg, has_active_proposal=has_active, has_attachments=False, captured_at=captured, tz=inp.tz)
+             for sg in segs]
+    if any(p.intent in SOLO_INTENTS for p in parts):
+        return [whole]
+    # low-confidence "question" fragments inside a task list are almost always task text; keep whole-utterance behavior
+    kinds = {p.intent for p in parts}
+    if kinds <= {"capture", "question"} and any(p.intent == "question" and p.confidence == "low" for p in parts):
+        return [whole]
+    merged: list[Interpretation] = []
+    cap: Interpretation | None = None
+    for p in parts:
+        if p.intent == "capture":
+            if cap is None:
+                cap = Interpretation("capture", commitments=list(p.commitments))
+                merged.append(cap)
+            else:
+                cap.commitments += p.commitments
+        else:
+            merged.append(p)
+    return merged
+
+
+SECTION = {"capture": "Tasks", "schedule": "Calendar block", "agenda": "Calendar", "weather": "Weather", "brief": "Daily Command",
+           "debrief": "Nightly Debrief", "war_room": "War Room", "gta_queue": "GTA shift", "complete": "Complete task",
+           "area_summary": "Summary", "question": "Answer"}
+
+
+def _dispatch_multi(conn, inp: CommandInput, parts: list[Interpretation], reply: Reply, run_id: str, active, captured,
+                    tv, specialists: list[str]) -> None:
+    run_event(conn, run_id, "route", f"Understood {len(parts)} requests: " + ", ".join(p.intent.replace("_", " ") for p in parts))
+    spoken: list[str] = []
+    buf = Reply(defer=True)
+    for p in parts[: RUN_LIMITS["max_specialists"] + 2]:
+        sub = Reply(defer=True)
+        try:
+            _dispatch(conn, inp, p, sub, run_id, active, captured, tv, specialists)
+        except Exception as e:  # one failing request must not sink the others
+            log.exception("sub-request failed")
+            sub.say(f"That part failed ({type(e).__name__}); nothing was changed.")
+        reply.say(f"▸ {SECTION.get(p.intent, p.intent.replace('_', ' ').title())}")
+        reply.text_lines += sub.text_lines
+        reply.questions += sub.questions
+        reply.citations += sub.citations
+        buf.deferred += sub.deferred
+        if sub.spoken or sub.text_lines:
+            spoken.append(sub.spoken or _spoken("\n".join(sub.text_lines)))
+    if buf.deferred:
+        specs, summaries, assumptions, questions = [], [], [], []
+        for _title, sp, summary, asm, qs in buf.deferred:
+            specs += sp
+            summaries.append(summary)
+            assumptions += asm
+            questions += qs
+        n = len(specs)
+        _new_proposal(conn, inp, reply, run_id, f"{n} item{'s' if n != 1 else ''} from your request", specs,
+                      "; ".join(summaries), assumptions, questions)
+    reply.spoken = " ".join(x.strip() for x in spoken if x)[:900]
+
+
+def _agenda(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id: str) -> None:
+    from zoneinfo import ZoneInfo
+    tz = inp.tz
+    day = date.fromisoformat(it.new_when.date) if it.new_when and it.new_when.date else ctx.local_today(conn)
+    label = _spoken_date(day.isoformat(), tz)
+    run_event(conn, run_id, "tool", "Reading selected calendars")
+    start, end = ctx.day_bounds(day, tz)
+    cal = ctx.events_between(conn, start, end, force=True)
+    if cal["status"] not in ("ok", "partial"):
+        reply.say(f"I can't read your calendar ({cal['status'].replace('_', ' ')}): {cal.get('detail') or ''}".strip())
+        reply.spoken = "I can't read your calendar right now."
+        return
+    evs = cal["events"]
+    zi = ZoneInfo(tz)
+
+    def t(e):
+        return "All day" if e["all_day"] else datetime.fromisoformat(e["start"]).astimezone(zi).strftime("%-I:%M %p")
+    head = f"{label.capitalize()} ({day.strftime('%a %b %-d')}): "
+    if not evs:
+        reply.say(head + "nothing on your selected calendars.")
+    else:
+        reply.say(head + f"{len(evs)} event{'s' if len(evs) != 1 else ''}.")
+        for e in evs:
+            reply.say(f"  • {t(e)} — {e['summary']}" + (f" ({e['calendar']})" if e.get("calendar") else ""))
+    wins = ctx.work_windows(evs, day, tz)
+    if wins:
+        longest = max(wins, key=lambda w: w["minutes"])
+        reply.say(f"Longest open block: {datetime.fromisoformat(longest['start'].replace('Z', '+00:00')).astimezone(zi).strftime('%-I:%M %p')}"
+                  f" ({longest['minutes'] // 60}h {longest['minutes'] % 60}m).")
+    for c in ctx.conflicts(evs):
+        reply.say(f"Conflict: {c}")
+    dls = [d for d in ctx.deadlines_snapshot(conn, day, 0)["items"] if d["local_date"] == day.isoformat()]
+    for d in dls:
+        reply.say(f"  ⚑ Deadline: {d['summary']}")
+    timed = [e for e in evs if not e["all_day"]]
+    if not evs:
+        reply.spoken = f"{label.capitalize()} your calendar is clear."
+    else:
+        first = timed[0] if timed else evs[0]
+        reply.spoken = (f"{label.capitalize()} you have {len(evs)} event{'s' if len(evs) != 1 else ''}. "
+                        f"First up: {first['summary']}" + (f" at {t(first)}" if not first["all_day"] else "") + ".")
+
+
+def _weather(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id: str) -> None:
+    from jarvis.agents import weather as W
+    if not W.enabled(conn):
+        reply.say("Weather is turned off in Settings.")
+        return
+    loc = W.location(conn)
+    day = date.fromisoformat(it.new_when.date) if it.new_when and it.new_when.date else ctx.local_today(conn)
+    run_event(conn, run_id, "tool", f"Checking the forecast for {loc['name']} (Open-Meteo)")
+    try:
+        data = W.fetch(loc, inp.tz)
+    except W.WeatherUnavailable as e:
+        reply.say(str(e) + " Try again in a moment.")
+        reply.spoken = "I couldn't reach the weather service."
+        return
+    f = W.forecast_for(data, day)
+    if not f:
+        reply.say(f"I only have a 7-day forecast; {day.strftime('%a %b %-d')} is outside it.")
+        return
+    text, spoken = W.describe(f, loc["name"], _spoken_date(day.isoformat(), inp.tz))
+    reply.say(text)
+    reply.spoken = spoken
+
+
+def speechify(text: str) -> str:
+    """Make text safe to read aloud: no markdown symbols, bullets, arrows, URLs or IDs are ever spoken."""
+    t = re.sub(r"https?://\S+", "", text or "")
+    t = re.sub(r"\[[^\]]*·[^\]]*\]", "", t)             # [source · locator] citations
+    t = t.replace(" / ", ", ")
+    t = re.sub(r"`{1,3}[^`]*`{1,3}", lambda m: m.group(0).strip("`"), t)
+    t = re.sub(r"(\*\*|__)(.+?)\1", r"\2", t)          # **bold** / __bold__
+    t = re.sub(r"(?<![\w*])[*_](?!\s)(.+?)(?<!\s)[*_](?![\w*])", r"\1", t)   # *italic*
+    t = re.sub(r"^\s*#{1,6}\s*", "", t, flags=re.M)      # headings
+    t = re.sub(r"^\s*(?:[-*+•▸⚑]|\d+[.)])\s+", "", t, flags=re.M)   # list markers
+    t = re.sub(r"[*#_`|>~▸⚑•→—–]+", " ", t)             # any leftover symbols
+    t = t.replace("°F", " degrees").replace("%", " percent")
+    t = re.sub(r"\s*\n\s*", ". ", t)
+    t = re.sub(r"\.\s*\.", ".", t)
+    return re.sub(r"\s{2,}", " ", t).strip(" .") + ("." if t.strip() else "")
 
 
 def _spoken(text: str) -> str:
@@ -219,6 +381,12 @@ def _dispatch(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id:
             reply.say(f"(Today's mission: {plan['mission']})")
         reply.spoken = f"{len(rel)} open {it.payload} tasks." if snap["status"] == "ok" else "Todoist isn't connected."
         return None
+    if intent == "agenda":
+        specialists.append("calendar")
+        return _agenda(conn, inp, it, reply, run_id)
+    if intent == "weather":
+        specialists.append("weather")
+        return _weather(conn, inp, it, reply, run_id)
     if intent == "local_file":
         specialists.append("local_operator")
         from jarvis.localops import operator
@@ -234,6 +402,9 @@ def _dispatch(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id:
 
 
 def _new_proposal(conn, inp: CommandInput, reply: Reply, run_id: str, title: str, specs, summary: str, assumptions, questions):
+    if reply.defer:
+        reply.deferred.append((title, specs, summary, assumptions, questions))
+        return None
     if (old := P.active_for_conversation(conn, inp.conversation_id)):
         # one active approval context: an older unapproved plan is superseded, never silently executed
         conn.execute("UPDATE proposals SET status='superseded', updated_at=? WHERE id=?", (now_iso(), old["id"]))
@@ -265,7 +436,12 @@ def _capture(conn, inp: CommandInput, commitments: list[Commitment], reply: Repl
     said = "; ".join(f"{c.content}, {_spoken_date(s.args.get('due_date') or (s.args.get('due_local') or '')[:10], inp.tz)}"
                      if (s.args.get('due_date') or s.args.get('due_local')) else c.content for c, s in zip(commitments, specs))
     head = f"I have {n} task{'s' if n != 1 else ''} ready: {said}."
-    reply.spoken = head + (" Shall I add them?" if not blocked else " One thing first — " + blocked[0].split(" (")[0].lower() + ".")
+    if not blocked:
+        reply.spoken = head + (" Shall I add them?" if n > 1 else " Shall I add it?")
+    elif "not connected" in blocked[0].lower():
+        reply.spoken = head + " One thing first: Todoist isn't connected yet."
+    else:
+        reply.spoken = head + " One thing first: pick which Todoist project I should use, right on the card."
     _new_proposal(conn, inp, reply, run_id, f"{len(specs)} task(s) from your request", specs,
                   "; ".join(ln.split('. ', 1)[1] for ln in lines), assumptions, questions)
 
@@ -500,7 +676,8 @@ def _question(conn, inp: CommandInput, reply: Reply, run_id: str) -> None:
     run_event(conn, run_id, "tool", "Asking the reasoning model with bounded context")
     system = ("You are Jarvis, AJ's concise personal operator. Lead with the priority and next action. Use only the provided "
               "context; say when data is missing or a source is not connected. You cannot take actions from this answer; "
-              "if an action is needed, tell AJ what to say to propose it. Keep it under 120 words.")
+              "if an action is needed, tell AJ what to say to propose it. Keep it under 120 words. Write plain conversational "
+              "sentences only: no markdown, no asterisks, no bullet symbols, no headings — your reply is also read aloud.")
     try:
         out = llm.complete(conn, purpose="question", system=system,
                            content=[{"type": "text", "text": "Context:\n" + "\n".join(context_lines)},

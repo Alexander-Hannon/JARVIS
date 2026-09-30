@@ -377,6 +377,7 @@ Your phone can't reach `localhost` on your laptop, so you need a private HTTPS l
 - **Hold** the mic for push-to-talk instead; it sends when you let go.
 - Say several things in one go ("…and then remind me to…", "…I also need to…"). Each one becomes its own task.
 - If it misheard, just say the fix ("change Thursday to Friday", "remove the groceries one").
+- Ask for several different things at once. Jarvis answers each one in its own section (**Tasks**, **Calendar**, **Weather**…). Only the task part needs your approval.
 - Or just type.
 
 ### Things you can say
@@ -391,6 +392,9 @@ Your phone can't reach `localhost` on your laptop, so you need a private HTTPS l
 | "What did you just add?" | Shows what was done, with proof from Todoist/Google |
 | "Block 45 minutes tomorrow afternoon for MKT 601 reading" | Finds a free slot → calendar proposal |
 | "Mark grade MSC 550 quizzes done" | Proposes completing that Todoist task |
+| "What does my calendar look like tomorrow?" | Calendar rundown for that day: events, longest open block, conflicts, deadlines |
+| "What's the weather tomorrow?" | Forecast for Huntsville from Open-Meteo (free, no account; only the city's coordinates are sent) |
+| "Make a Todoist task to finish grading tomorrow, give me my calendar, and tell me the weather" | Handles **each request separately**: one task proposal, a calendar rundown, and the forecast in a single reply |
 | "What should I do during my GTA shift?" | GTA duties first, then a conditional school queue |
 | "Brief me" / "nightly debrief" / "war room" | Generates that briefing |
 | "Remember that I do schoolwork during GTA shifts only after grading" | Saves/updates a preference |

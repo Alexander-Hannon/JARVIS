@@ -189,7 +189,8 @@ def spoken_summary(kind: str, c: dict) -> str:
     missing = [n for n in c.get("notes", []) if "not connected" in n or "unavailable" in n]
     if missing:
         parts.append(f"Heads up: {len(missing)} source{'s' if len(missing) > 1 else ''} unavailable.")
-    return " ".join(parts)[:400]
+    from jarvis.agents.chief import speechify
+    return speechify(" ".join(parts))[:400]
 
 
 def generate(conn: sqlite3.Connection, kind: str, force: bool = False, run_id: str | None = None,

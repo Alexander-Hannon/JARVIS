@@ -92,6 +92,21 @@ class BrowserSpeechTts implements TtsProvider {
   }
 }
 
+/** Never read markdown / symbols aloud (server already cleans spoken text; this is the client-side safety net). */
+export function speakable(text: string): string {
+  return text
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/\[[^\]]*·[^\]]*\]/g, '')
+    .replace(/(\*\*|__)(.+?)\1/g, '$2')
+    .replace(/^\s*#{1,6}\s*/gm, '')
+    .replace(/^\s*(?:[-*+•▸⚑]|\d+[.)])\s+/gm, '')
+    .replace(/[*#_`|>~▸⚑•→]+/g, ' ')
+    .replace(/°F/g, ' degrees')
+    .replace(/\s*\n\s*/g, '. ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 /** Voice names starting with this prefix are local Piper presets served by the Jarvis backend. */
 export const JARVIS_VOICE_PREFIX = 'jarvis:';
 export const JARVIS_PRESETS = [
@@ -129,7 +144,8 @@ class JarvisTts implements TtsProvider {
     ];
   }
 
-  speak(text: string, opts: TtsOptions = {}): void {
+  speak(raw: string, opts: TtsOptions = {}): void {
+    const text = speakable(raw);
     if (!text.trim()) return;
     this.stop();
     const name = opts.voiceName ?? JARVIS_VOICE_PREFIX + 'jarvis';

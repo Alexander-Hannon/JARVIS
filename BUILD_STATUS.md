@@ -1,5 +1,28 @@
 # BUILD_STATUS
 
+## Session 3 update (2026-09-29): multi-request commands
+- **Bug:** a sentence mixing a task, a calendar question and a weather question became three Todoist tasks. **Fix:**
+  - `segment_utterance()` splits an utterance into separate requests and classifies each one.
+  - Tasks merge into one approval card; calendar and weather are answered directly; everything comes back as one sectioned reply.
+  - Approvals, corrections and cancels are still treated as a single whole utterance.
+- **New specialists:**
+  - Calendar rundown for any day, from the connected calendars.
+  - Weather via Open-Meteo: free, no account; only the configured location's coordinates are sent (default Huntsville, AL).
+- **Understanding:**
+  - "go ahead and…" and "make a Todoist task (for me) to…" lead-ins are recognized.
+  - The STT spelling "to-do-is" is normalized to Todoist.
+  - Local STT is biased toward AJ's vocabulary (hotwords) for utterances of 3 s or more; short replies like "approve" are unaffected.
+  - Whisper now loads offline when the model is already downloaded.
+- **Speech:**
+  - `speechify()` removes markdown, bullets, symbols, URLs and citations before anything is spoken, with a second cleanup in the browser voice.
+  - Model prompts now ask for plain sentences.
+  - The UI renders `▸` sections, bullets and **bold** properly instead of showing raw asterisks.
+- **Layout:** the command dock is compact, so replies are no longer hidden behind the mic panel.
+- **Evidence:**
+  - Backend: 229 passed. That includes the reported utterance as typed text, and as real synthesized speech that transcribed word-for-word with "Todoist".
+  - UI (mocked): 15 passed.
+  - Real-backend browser tests: 2 passed, one of them against the live Open-Meteo API (returned tomorrow's forecast: overcast, 91°F / 68°F).
+
 ## Session 2 update (2026-09-29): fixes from AJ's first real use
 - **Command splitting:** "Hey/Yo/OK Jarvis" greetings are stripped. "then", "after that" and mid-sentence lead-ins ("remind me to", "I also need to", "I want you to…") always start a new task. Trailing "thanks/please" is dropped. 9 regression tests in `tests/test_splitting.py`.
 - **Unclickable checkbox:** the cause was that no Todoist destination project was chosen. Cards now show a "One step left" project picker. Choosing a project (here or in Settings) re-resolves open plans into a new version with the checkboxes unlocked. Tested.

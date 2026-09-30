@@ -12,12 +12,16 @@ from datetime import datetime
 
 from jarvis.core import timeparse
 
+_TASK_CREATE = (r"(?:(?:please|go ahead and|can you|could you)\s+)*(?:make|create|add|put|set up|write down|jot down)\s+"
+                r"(?:me\s+)?(?:a|an|another)?\s*(?:new\s+)?(?:Todoist|to-?do|task|reminder)(?:\s+(?:task|item|reminder))?"
+                r"(?:\s+(?:in|on) (?:my )?Todoist)?(?:\s+for me)?(?:\s+(?:to|that says|saying|called|for))?\b")
 LEAD_INS = [
     r"i also need to", r"i need to", r"i have to", r"i've got to", r"i got to", r"i gotta", r"i should", r"i must",
     r"remind me to", r"don't let me forget to", r"please", r"can you", r"could you", r"add a task to", r"add a to-?do to",
     r"add task", r"add", r"to-?do:?", r"also", r"and", r"then", r"jarvis,?", r"hey jarvis,?", r"ok(ay)?,?",
     r"i want you to", r"i need you to", r"i'd like you to", r"will you", r"would you", r"don't forget to",
-    r"make sure to", r"make sure i", r"set a reminder to", r"after that", r"plus",
+    r"make sure to", r"make sure i", r"set a reminder to", r"after that", r"plus", r"go ahead and", r"go ahead",
+    _TASK_CREATE,
 ]
 _LEAD_RE = re.compile(r"^\s*(?:" + "|".join(LEAD_INS) + r")\b[\s,:]*", re.IGNORECASE)
 VERBS = set(["shop", "remind", "see", "talk", "tell", "look", "find", "install", "move", "sell", "try", "help", "watch",
@@ -94,6 +98,43 @@ _MID_LEAD = (r"(?:(?:can|could|would|will) you\s+|please\s+|i (?:want|need) you 
              r"(?:remind me to|i (?:also )?need to|i have to|i've got to|i got to|i gotta|don't let me forget to|"
              r"don't forget to|make sure (?:i|to)|set a reminder to|add a (?:task|to-?do) to)\b")
 _SPLIT_BEFORE_LEAD = re.compile(r"\s*,?\s+(?:(?:and|also|plus)\s+)?(?:then\s+)?(?=" + _MID_LEAD + ")", re.IGNORECASE)
+
+
+# STT spellings of names Jarvis cares about ("to-do-is" → Todoist).
+NORMALIZE = [(r"\bto[- ]?do[- ]?is(?:t|ts)?\b", "Todoist"), (r"\btodo ist\b", "Todoist"), (r"\bi[- ]?flex\b", "iFlex")]
+
+
+def normalize(text: str) -> str:
+    for pat, rep_ in NORMALIZE:
+        text = re.sub(pat, rep_, text, flags=re.IGNORECASE)
+    return text
+
+
+# Asks for information (not tasks). A new request starts at one of these when it follows a conjunction/comma,
+# or anywhere after "go ahead and".
+_REQUEST = (r"(?:please\s+|can you\s+|could you\s+|would you\s+)?"
+            r"(?:give me|tell me|show me|brief me|let me know|read me|pull up|check (?:my|the)|what(?:'s|s)?\b|how(?:'s|s)?\b|"
+            r"when(?:'s)?\b|is it going to|will it)\b")
+TASK_CREATE_RE = re.compile(r"^\s*" + _TASK_CREATE + r"[\s:,]*", re.IGNORECASE)
+_SEGMENT_SPLIT = re.compile(
+    r"(?:\s*,\s*(?:and\s+|then\s+|also\s+)*|\s+(?:and|then|also|plus)\s+(?:then\s+|also\s+)*)(?=" + _REQUEST + r")"
+    r"|\s*,?\s+(?=go ahead and\b)"
+    r"|\s*,?\s+(?:(?:and|also|plus)\s+)?(?:then\s+)?(?=" + _TASK_CREATE + r")",
+    re.IGNORECASE)
+_SEG_LEAD = re.compile(r"^\s*(?:(?:and|then|also|plus|so|okay|ok|alright|go ahead and|go ahead|please)[\s,]+)+", re.IGNORECASE)
+
+
+def segment_utterance(text: str) -> list[str]:
+    """Split one utterance into separate REQUESTS (a task batch, a calendar rundown, a weather question, ...).
+    Task lists inside a request are split later by split_commitments()."""
+    t = re.sub(r"\s+", " ", normalize(strip_wake(text.strip())))
+    out: list[str] = []
+    for sent in re.split(r"(?<=[.!?])\s+(?=[A-Za-z])|\s*;\s*", t):
+        for piece in _SEGMENT_SPLIT.split(strip_wake(sent)):
+            piece = _SEG_LEAD.sub("", piece or "").strip(" ,.;")
+            if piece and not re.fullmatch(r"(?:go ahead|thanks?|thank you|please|that's (?:it|all))", piece, re.I):
+                out.append(piece)
+    return out
 
 
 def strip_wake(text: str) -> str:
@@ -199,6 +240,23 @@ def classify(text: str, *, has_active_proposal: bool, has_attachments: bool, cap
         corr = _correction(t, captured_at, tz)
         if corr:
             return corr
+
+    t = normalize(t)
+    low = t.lower()
+    m_task = TASK_CREATE_RE.match(t)
+    if m_task and len(t[m_task.end():].split()) >= 1:
+        cs = extract_commitments(t[m_task.end():], captured_at, tz)
+        if cs:
+            return Interpretation("capture", commitments=cs)
+    if re.search(r"\b(weather|forecast|temperature|rain(?:ing|y)?|snow(?:ing)?|umbrella|how (?:hot|cold|warm))\b", low) \
+            and not re.search(r"\b(remind|task|todoist)\b", low):
+        return Interpretation("weather", payload=t, new_when=timeparse.resolve(t, captured_at, tz))
+    if re.search(r"\b(meeting|call) (notes|transcript|recording)\b|\b(notes|transcript) from\b|\bdebrief (this|the) (meeting|call)\b", low):
+        return Interpretation("meeting_debrief", payload=t)
+    if re.search(r"\b(calendar|schedule|agenda|meetings?|events?|appointments?)\b", low) and \
+            re.search(r"\b(what|look(?:s)? like|debrief|rundown|run-down|show|tell|give|brief|anything|busy|free|how)\b", low) and \
+            not re.search(r"\b(block|book|carve out|reserve|add|put|create|move)\b", low):
+        return Interpretation("agenda", payload=t, new_when=timeparse.resolve(t, captured_at, tz))
 
     if re.match(r"^(please )?(remember|note|keep in mind)( that)?\b", low):
         payload = re.sub(r"^(please )?(remember|note|keep in mind)( that)?\s*", "", t, flags=re.IGNORECASE)
