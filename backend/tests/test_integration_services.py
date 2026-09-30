@@ -186,3 +186,38 @@ def test_choosing_todoist_project_unblocks_open_proposal(client, fakes, conn):
     assert all(i["args"]["project_id"] == "proj-jarvis" for i in v["items"])
     ok = client.post(f"/api/proposals/{p['id']}/approve", {"version": 2, "hash": v["hash"], "selected_items": [0, 1]})
     assert ok.status_code == 200
+
+
+def test_gzip_feed_and_url_never_logged(client, conn, caplog):
+    """Regression (AJ's worker log): Canvas serves gzip; body was decoded twice. And httpx logged the private URL."""
+    import gzip
+    import logging
+
+    import httpx
+    import respx
+
+    from jarvis.integrations import accounts as A
+    from jarvis.integrations import service
+    from jarvis.logsafe import configure
+    configure()
+    freeze(CHICAGO_AFTERNOON)
+    url = "https://uah.instructure.com/feeds/calendars/user_SECRETTOKEN123.ics"
+    conn.execute("BEGIN")
+    A.upsert_account(conn, "ics", "Deadline feed", url, "ics_url", external_account_id="ics-feed")
+    conn.execute("COMMIT")
+    caplog.set_level(logging.INFO)
+    with respx.mock() as m:
+        m.get(url).mock(return_value=httpx.Response(200, content=gzip.compress(ICS), headers={"Content-Encoding": "gzip"}))
+        from jarvis.security import netguard
+        real = netguard.validate_url
+        netguard.validate_url = lambda u, allow=None, resolver=None: u     # skip DNS in tests
+        try:
+            res = service.ics_refresh(conn)
+        finally:
+            netguard.validate_url = real
+    assert res["items"] == 3
+    assert "SECRETTOKEN123" not in caplog.text
+    from jarvis.logsafe import RedactURLs
+    rec = logging.LogRecord("x", logging.INFO, __file__, 1, "fetched %s", (url,), None)
+    RedactURLs().filter(rec)
+    assert "SECRETTOKEN123" not in rec.getMessage() and "[redacted]" in rec.getMessage()
