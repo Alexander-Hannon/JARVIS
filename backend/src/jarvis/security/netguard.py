@@ -55,7 +55,10 @@ def safe_get(url: str, max_bytes: int = 5 * 1024 * 1024, timeout: float = 20.0, 
                     buf.extend(chunk)
                     if len(buf) > max_bytes:
                         raise UnsafeURL(f"Response exceeded {max_bytes} bytes.")
-                return httpx.Response(resp.status_code, headers=resp.headers, content=bytes(buf), request=resp.request)
+                # iter_bytes() already undid gzip/deflate: drop encoding/length headers so the body isn't decoded twice.
+                headers = {k: v for k, v in resp.headers.items() if k.lower() not in ("content-encoding", "content-length",
+                                                                                      "transfer-encoding")}
+                return httpx.Response(resp.status_code, headers=headers, content=bytes(buf), request=resp.request)
         raise UnsafeURL("Too many redirects.")
     finally:
         if own:

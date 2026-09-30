@@ -327,7 +327,7 @@ test.describe('UI (mocked API) — mobile 390x844', () => {
     await page.getByRole('navigation', { name: 'Primary mobile' }).getByRole('link', { name: 'Command' }).click();
     const rec = page.getByTestId('record-btn');
     const box = await rec.boundingBox();
-    expect(box!.height).toBeGreaterThanOrEqual(80); // large, thumb-friendly
+    expect(box!.height).toBeGreaterThanOrEqual(48); // compact orb, still above the 44px touch-target minimum
     await rec.tap();
     await expect(page.getByTestId('voice-status')).toContainText('Recording');
     await page.screenshot({ path: `${SHOTS}/mobile-recording.png` });

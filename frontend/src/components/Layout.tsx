@@ -40,13 +40,13 @@ function PauseControl() {
       </div>
     ) : (
       <button type="button" className="btn pause-btn paused" aria-pressed="true" data-testid="pause-toggle" onClick={() => setConfirmResume(true)} disabled={busy}>
-        <PlayIcon /> Actions paused{inflight.length ? ` · ${inflight.length} in flight` : ''}
+        <PlayIcon /> <span className="btn-label">Actions paused{inflight.length ? ` · ${inflight.length} in flight` : ''}</span>
       </button>
     );
   }
   return (
     <button type="button" className="btn pause-btn" aria-pressed="false" data-testid="pause-toggle" onClick={() => void pause('Paused from header')} disabled={busy}>
-      <PauseIcon /> Pause actions{inflight.length ? ` · ${inflight.length} in flight` : ''}
+      <PauseIcon /> <span className="btn-label">Pause actions{inflight.length ? ` · ${inflight.length} in flight` : ''}</span>
     </button>
   );
 }
@@ -90,8 +90,13 @@ function StopSpeaking() {
   const { speaking, stop } = useSpeech();
   if (!speaking) return null;
   return (
-    <button type="button" className="btn btn-small" onClick={stop}>
-      Stop speaking
+    <button type="button" className="btn btn-small stop-speak" onClick={stop} aria-label="Stop speaking">
+      <span aria-hidden="true" className="speak-wave">
+        <i />
+        <i />
+        <i />
+      </span>
+      <span className="btn-label">Stop speaking</span>
     </button>
   );
 }

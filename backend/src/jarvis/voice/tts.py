@@ -107,21 +107,22 @@ class TTSEngine:
                 self._voices[model] = PiperVoice.load(d / f"{model}.onnx", config_path=d / f"{model}.onnx.json")
             return self._voices[model]
 
-    def synthesize(self, text: str, preset: str = "jarvis") -> bytes:
+    def synthesize(self, text: str, preset: str = "jarvis", rate: float = 1.0) -> bytes:
         text = " ".join(text.split())[:MAX_CHARS]
         for pat, rep in LEXICON:
             text = re.sub(pat, rep, text, flags=re.IGNORECASE)
         if not text:
             raise ValueError("empty text")
         p = PRESETS.get(preset, PRESETS["jarvis"])
-        key = (p.key, text)
+        rate = max(0.6, min(1.8, float(rate or 1.0)))
+        key = (p.key, round(rate, 2), text)
         if key in self._cache:
             self._cache.move_to_end(key)
             return self._cache[key]
         from piper import SynthesisConfig
         voice = self._voice(p.model)
         t = time.perf_counter()
-        cfg = SynthesisConfig(speaker_id=p.speaker, length_scale=p.length_scale, noise_scale=0.6, noise_w_scale=0.7)
+        cfg = SynthesisConfig(speaker_id=p.speaker, length_scale=p.length_scale / rate, noise_scale=0.6, noise_w_scale=0.7)
         chunks = list(voice.synthesize(text, syn_config=cfg))
         sr = chunks[0].sample_rate if chunks else 22050
         audio = np.concatenate([c.audio_float_array for c in chunks]) if chunks else np.zeros(1, np.float32)

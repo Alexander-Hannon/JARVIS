@@ -126,3 +126,25 @@ def test_model_answer_markdown_is_not_spoken(client, fakes):
     set_provider(ScriptedLLM(["**Focus:** finish the **IS 640** grading first.\n- then *MKT 601*"]))
     r = client.post("/api/commands", {"text": "what should I prioritize tonight?", "captured_at": "2026-09-29T22:26:00Z"}).json()
     assert "*" not in r["message"]["spoken_text"] and "finish the IS 640 grading first" in r["message"]["spoken_text"]
+
+
+def test_replies_carry_visual_cards(client, fakes, weather_api):
+    freeze(NOW)
+    _seed_calendar(fakes)
+    r = client.post("/api/commands", {"text": AJ, "captured_at": "2026-09-29T22:26:00Z", "tz": "America/Chicago"}).json()
+    kinds = {v["type"] for v in r["visuals"]}
+    assert {"calendar", "weather"} <= kinds
+    cal = next(v for v in r["visuals"] if v["type"] == "calendar")
+    assert [e["summary"] for e in cal["days"][0]["events"]] == ["IS 640 GTA shift", "CCM leadership"]
+    assert cal["days"][0]["events"][0]["start"].startswith("2026-09-29T18:00:00-05:00")
+    wx = next(v for v in r["visuals"] if v["type"] == "weather")
+    assert wx["focus"] == "2026-09-30" and len(wx["days"]) == 3
+    today = client.get("/api/today").json()
+    assert today["calendar_visual"]["type"] == "calendar"
+
+
+def test_tts_rate_changes_speed_not_pitch(client):
+    from jarvis.voice.tts import get_tts
+    slow = get_tts().synthesize("Good evening, sir.", "jarvis", 0.8)
+    fast = get_tts().synthesize("Good evening, sir.", "jarvis", 1.5)
+    assert len(fast) < len(slow) * 0.75          # shorter audio = faster speech, synthesized (natural pitch)

@@ -129,6 +129,25 @@ function useSpeechState(): SpeechCtx {
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
   useEffect(() => tts.subscribe(() => setSpeaking(tts.isSpeaking())), []);
+  // Voice prefs follow you across devices: the server copy (saved on every change) wins on load.
+  useEffect(() => {
+    api
+      .settings()
+      .then((st) => {
+        const v = (st as unknown as { voice?: { voice_name?: string | null; rate?: number; muted?: boolean } }).voice;
+        if (!v) return;
+        setPrefsState((prev) => {
+          const next = {
+            voiceName: v.voice_name ?? prev.voiceName,
+            rate: typeof v.rate === 'number' ? v.rate : prev.rate,
+            muted: typeof v.muted === 'boolean' ? v.muted : prev.muted,
+          };
+          saveVoicePrefs(next);
+          return next;
+        });
+      })
+      .catch(() => undefined);
+  }, []);
   const setPrefs = useCallback((p: Partial<VoicePrefs>) => {
     setPrefsState((prev) => {
       const next = { ...prev, ...p };

@@ -1,5 +1,27 @@
 # BUILD_STATUS
 
+## Session 5 update (2026-09-30): conversational voice, visuals, phone polish
+- **Conversational:** the V2 system prompt now makes Jarvis talk *to* AJ: natural first person, times said the way people say them, lists summarized because cards show the detail, and an optional short follow-up question.
+- **Auto-speak on phones:**
+  - One persistent audio element is unlocked on the first tap, which gets around iOS autoplay blocking.
+  - Every reply is spoken automatically in the Jarvis voice (live-tested: the TTS request fires with no click, with clean text).
+  - Fixed a bug found along the way: the audio unlock marked Jarvis as "speaking" at mic start, which would have blocked voice approvals.
+- **Voice preferences:**
+  - Speed is now synthesized by Piper (natural pitch), with a finer slider.
+  - Prefs sync from the server on load, so the phone and laptop share them (live-tested with a fresh browser context).
+- **Visual cards** (`agents/visuals.py`, `components/Visuals.tsx`), attached to replies from both V2 tools and offline handlers:
+  - Calendar timeline: hour grid, overlapping events side by side, open windows, an all-day row and a "now" line.
+  - Weather: current conditions plus a 7-day strip with SVG icons.
+  - Tasks with due chips, and free slots.
+  - The Today page shows the timeline and weather. The `/api/weather` endpoint was added.
+- **Phone:**
+  - 52 px orb.
+  - One-row composer (attach, text, send).
+  - Icon-only header buttons.
+  - An animated speaking indicator.
+  - Hidden badge clutter.
+- **Tests:** backend 239 passed; UI (mocked) 15 passed; new real-backend voice tests 2 passed. Screenshots were checked on desktop and at 390×844.
+
 ## Session 4 update (2026-09-30): JARVIS V2 — agentic brain
 - **Complaint:** commands defaulted to Todoist tasks. **Fix:** a Claude tool-use loop (`agents/agent.py`) now decides intent and picks tools, including web search and fetch. See ARCHITECTURE.md → "V2 brain".
 - **Safety rails in code:**

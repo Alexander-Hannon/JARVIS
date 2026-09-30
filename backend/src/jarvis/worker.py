@@ -98,6 +98,8 @@ def maybe_periodic(conn, last: dict) -> None:
 
 def main(poll_seconds: float = 5.0) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from jarvis.logsafe import configure
+    configure()
     worker_id = new_id("wkr")
     started = now_iso()
 

@@ -45,9 +45,9 @@ export function SpeechControls({ full = false }: { full?: boolean }) {
             </optgroup>
           </select>
           <label htmlFor={rid} className="small">
-            Rate {s.prefs.rate.toFixed(1)}×
+            Speed {s.prefs.rate.toFixed(2)}×
           </label>
-          <input id={rid} type="range" min={0.6} max={1.6} step={0.1} value={s.prefs.rate} onChange={(e) => s.setPrefs({ rate: Number(e.target.value) })} />
+          <input id={rid} type="range" min={0.7} max={1.6} step={0.05} value={s.prefs.rate} onChange={(e) => s.setPrefs({ rate: Number(e.target.value) })} />
           <button type="button" className="btn btn-small" onClick={() => s.speak('Good evening. All systems are online, and I am at your service.')} disabled={s.prefs.muted}>
             Test voice
           </button>

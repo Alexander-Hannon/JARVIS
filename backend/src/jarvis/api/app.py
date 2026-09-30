@@ -50,6 +50,8 @@ def require_session(request: Request, conn=Depends(db)) -> dict:
 
 
 def create_app() -> FastAPI:
+    from jarvis.logsafe import configure
+    configure()
     s = get_settings()
     s.ensure_dirs()
     secrets.ensure_key()

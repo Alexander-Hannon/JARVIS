@@ -262,7 +262,8 @@ def ics_refresh(conn, fetcher=None) -> dict:
         body = fetcher(url) if fetcher else safe_get(url).content
     except (UnsafeURL, Exception) as e:  # never log the URL
         A.set_status(conn, acct["id"], "error", f"Feed refresh failed: {type(e).__name__}")
-        raise SetupError("fetch_failed", f"Feed refresh failed ({type(e).__name__}); last good data kept.") from e
+        # `from None`: chained httpx errors embed the private feed URL; never let it reach logs/tracebacks.
+        raise SetupError("fetch_failed", f"Feed refresh failed ({type(e).__name__}); last good data kept.") from None
     today = context.local_today(conn)
     ws, we = today - timedelta(days=7), today + timedelta(days=90)
     try:

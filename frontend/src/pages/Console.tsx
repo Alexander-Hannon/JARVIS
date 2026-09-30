@@ -1,4 +1,5 @@
 import { MessageText } from '../components/MessageText';
+import { Visuals } from '../components/Visuals';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, errorMessage } from '../api/client';
 import type { CommandResponse, EvidencePreview, JDocument, RunEvent } from '../api/types';
@@ -76,6 +77,7 @@ function ResponseView({ resp }: { resp: CommandResponse }) {
       </div>
       <Events events={resp.events ?? []} />
       <MessageText text={resp.message?.text} />
+      <Visuals items={resp.visuals} />
       {resp.questions?.length > 0 && (
         <ul className="questions">
           {resp.questions.map((q, i) => (
@@ -89,8 +91,15 @@ function ResponseView({ resp }: { resp: CommandResponse }) {
           <ul>
             {resp.citations.map((c, i) => (
               <li key={i}>
-                <strong>{c.title}</strong> <span className="muted">({c.locator})</span>
-                <blockquote>{c.excerpt}</blockquote>
+                {c.url ? (
+                  <a href={c.url} target="_blank" rel="noreferrer noopener">
+                    <strong>{c.title || c.url}</strong>
+                  </a>
+                ) : (
+                  <strong>{c.title}</strong>
+                )}{' '}
+                <span className="muted">({c.locator})</span>
+                {c.excerpt && <blockquote>{c.excerpt}</blockquote>}
               </li>
             ))}
           </ul>
@@ -99,7 +108,7 @@ function ResponseView({ resp }: { resp: CommandResponse }) {
       <div className="row gap">
         {resp.message?.spoken_text && (
           <button type="button" className="btn btn-small btn-ghost" onClick={() => speech.speak(resp.message.spoken_text)} disabled={speech.prefs.muted} title={speech.prefs.muted ? 'Voice is muted' : undefined}>
-            ▶ Speak summary
+            ▶ Replay
           </button>
         )}
         {active && (
