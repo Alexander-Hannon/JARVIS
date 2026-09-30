@@ -167,6 +167,7 @@ def tts_status():
 class TTSIn(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     preset: str = "jarvis"
+    rate: float = Field(1.0, ge=0.5, le=2.0)
 
 
 @router.post("/voice/tts")
@@ -174,7 +175,7 @@ def tts(body: TTSIn, conn=Depends(db)):
 
     from jarvis.voice.tts import TTSUnavailable, get_tts
     try:
-        wav = get_tts().synthesize(body.text, body.preset)
+        wav = get_tts().synthesize(body.text, body.preset, body.rate)
     except TTSUnavailable as e:
         raise HTTPException(503, {"code": "tts_unavailable", "message": str(e)}) from e
     record_latency(conn, "tts", get_tts().last_ms or 0, {"preset": body.preset, "chars": len(body.text)})
@@ -509,7 +510,24 @@ def resume(conn=Depends(db)):
 # ================================================================ today / plan / briefings / schedules / notifications
 @router.get("/today")
 def today(refresh: bool = False, conn=Depends(db)):
-    return ctx.today(conn, force=refresh)
+    from jarvis.agents import visuals as V
+    snap = ctx.today(conn, force=refresh)
+    snap["calendar_visual"] = V.calendar(conn, date.fromisoformat(snap["date"]), 1, snap["tz"])
+    return snap
+
+
+@router.get("/weather")
+def weather_now(conn=Depends(db)):
+    from jarvis.agents import visuals as V
+    from jarvis.agents import weather as W
+    if not W.enabled(conn):
+        return {"type": "weather", "disabled": True}
+    loc = W.location(conn)
+    try:
+        data = W.fetch(loc, ctx.user_tz(conn))
+    except W.WeatherUnavailable as e:
+        raise HTTPException(503, str(e)) from e
+    return V.weather(data, loc, ctx.local_today(conn))
 
 
 class PlanIn(BaseModel):

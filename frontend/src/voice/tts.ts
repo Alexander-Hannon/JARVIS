@@ -116,6 +116,37 @@ export const JARVIS_PRESETS = [
   { key: 'northern', label: 'Northern English male (local)' },
 ];
 
+/**
+ * One persistent <audio> element, "unlocked" by the first user gesture. Mobile browsers (iOS especially) block
+ * audio started after a network wait unless the element was already played from a tap — this makes auto-speak work.
+ */
+let sharedAudio: HTMLAudioElement | null = null;
+function audioEl(): HTMLAudioElement {
+  if (!sharedAudio) {
+    sharedAudio = new Audio();
+    sharedAudio.preload = 'auto';
+  }
+  return sharedAudio;
+}
+const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+let unlocked = false;
+export function unlockAudio(): void {
+  if (unlocked || typeof window === 'undefined') return;
+  unlocked = true;
+  const a = audioEl();
+  a.src = SILENT_WAV;
+  a.play().catch(() => {
+    unlocked = false;
+  });
+  // Note: do NOT prime speechSynthesis here — an utterance in flight would mark Jarvis as "speaking" at mic start,
+  // and approvals captured while Jarvis speaks are (correctly) refused.
+}
+if (typeof window !== 'undefined') {
+  const once = () => unlockAudio();
+  window.addEventListener('pointerdown', once, { capture: true, passive: true });
+  window.addEventListener('keydown', once, { capture: true });
+}
+
 /** Local neural voice (Piper on the Jarvis host) with automatic fallback to the browser voice. */
 class JarvisTts implements TtsProvider {
   readonly name = 'jarvis-local-neural';
@@ -158,12 +189,13 @@ class JarvisTts implements TtsProvider {
     this.abort = new AbortController();
     this.speaking = true;
     this.emit();
-    fetchTtsAudio(text, preset, this.abort.signal)
+    fetchTtsAudio(text, preset, this.abort.signal, opts.rate ?? 1)
       .then((blob) => {
         if (my !== this.seq) return;
         const url = URL.createObjectURL(blob);
-        const a = new Audio(url);
-        a.playbackRate = Math.min(1.25, Math.max(0.8, opts.rate ?? 1));
+        const a = audioEl();
+        a.src = url;
+        a.playbackRate = 1; // speed is synthesized server-side (natural pitch)
         const done = () => {
           URL.revokeObjectURL(url);
           if (my === this.seq) {

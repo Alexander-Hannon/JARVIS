@@ -5,6 +5,7 @@ import type { Plan, Task, Today } from '../api/types';
 import { Async, Card, Empty, ErrorBox, SourceBadge } from '../components/ui';
 import { fmtDate, fmtRelative, fmtTime, humanValue, localTz, textOf } from '../lib/format';
 import { useAsync, useInterval } from '../lib/hooks';
+import { CalendarTimeline, WeatherCard } from '../components/Visuals';
 import { useConversation } from '../state/app';
 
 function taskDue(t: Task): string {
@@ -185,13 +186,16 @@ export function TodayPage() {
                 Object.entries(t.sources).map(([k, v]) => <SourceBadge key={k} name={k} info={v} />)
               )}
             </div>
+            <TodayWeather />
             <div className="grid-2">
               <PlanEditor plan={t.plan} onSaved={(p) => today.setData((d) => (d ? { ...d, plan: p } : d))} />
               <QuickCapture />
             </div>
             <div className="grid-2">
               <Card title={`Agenda (${t.agenda.length})`}>
-                {t.agenda.length ? (
+                {t.calendar_visual && ['ok', 'partial'].includes(t.calendar_visual.status ?? '') ? (
+                  <CalendarTimeline v={t.calendar_visual} compact />
+                ) : t.agenda.length ? (
                   <ul className="list">
                     {t.agenda.map((ev, i) => (
                       <li key={ev.id ?? i} className="list-row">
@@ -274,4 +278,11 @@ export function TodayPage() {
       {today.error && today.data === undefined ? <QuickCapture /> : null}
     </div>
   );
+}
+
+
+function TodayWeather() {
+  const wx = useAsync(() => api.weather(), []);
+  if (!wx.data || wx.data.disabled) return null;
+  return <WeatherCard v={wx.data} />;
 }

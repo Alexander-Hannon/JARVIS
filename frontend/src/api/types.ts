@@ -102,11 +102,12 @@ export interface RunEvent {
 }
 
 export interface Citation {
-  document_id: string;
+  document_id?: string;
   title: string;
   locator: string;
   excerpt: string;
-  segment_id: string | null;
+  segment_id?: string | null;
+  url?: string;
 }
 
 export interface CommandResponse {
@@ -119,6 +120,7 @@ export interface CommandResponse {
   events: RunEvent[];
   intent: string;
   specialists: string[];
+  visuals?: import('../components/Visuals').Visual[];
 }
 
 // ---------- Proposals ----------
@@ -291,6 +293,7 @@ export interface Today {
   agenda: AgendaEvent[];
   tasks_due: Task[];
   overdue?: Task[];
+  calendar_visual?: import('../components/Visuals').CalendarVisual;
   deadlines: Deadline[];
   conflicts: string[];
   work_windows: { start: ISODate; end: ISODate; label: string }[];

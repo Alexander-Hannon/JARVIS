@@ -100,11 +100,11 @@ export async function request<R>(path: string, opts: RequestOpts = {}): Promise<
 }
 
 /** Local neural TTS (Piper on the Jarvis host). Returns WAV bytes. */
-export async function fetchTtsAudio(text: string, preset: string, signal?: AbortSignal): Promise<Blob> {
+export async function fetchTtsAudio(text: string, preset: string, signal?: AbortSignal, rate = 1): Promise<Blob> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
   const res = await fetch('/api/voice/tts', {
-    method: 'POST', headers, body: JSON.stringify({ text, preset }), credentials: 'same-origin', signal, cache: 'no-store',
+    method: 'POST', headers, body: JSON.stringify({ text, preset, rate }), credentials: 'same-origin', signal, cache: 'no-store',
   });
   if (!res.ok) throw new ApiError(res.status, `Voice synthesis failed (${res.status})`, 'tts_unavailable', null);
   return res.blob();
@@ -216,6 +216,7 @@ export const api = {
   settings: () => request<T.Settings>('/api/settings'),
   patchSettings: (p: Partial<T.Settings>) => request<T.Settings>('/api/settings', { method: 'PATCH', json: p }),
   budget: () => request<T.Budget>('/api/budget'),
+  weather: () => request<import('../components/Visuals').WeatherVisual>('/api/weather'),
   brain: () =>
     request<{ mode: 'v2_agent' | 'offline'; reason: string | null; web_research: boolean; model: string; tools: string[]; notes: string }>(
       '/api/brain',

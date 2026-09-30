@@ -54,6 +54,7 @@ class Reply:
         self.proposal_id: str | None = None
         self.questions: list[str] = []
         self.citations: list[dict] = []
+        self.visuals: list[dict] = []
         self.status = "completed"
 
     def say(self, s: str):
@@ -157,7 +158,7 @@ def handle(conn: sqlite3.Connection, inp: CommandInput) -> dict:
             "message": {"id": mid, "role": "assistant", "text": text, "spoken_text": spoken, "proposal_id": reply.proposal_id,
                         "capture_id": inp.capture_id, "created_at": now_iso()},
             "proposal": P.view(conn, reply.proposal_id) if reply.proposal_id else None, "questions": reply.questions,
-            "citations": reply.citations, "events": events}
+            "citations": reply.citations, "visuals": reply.visuals, "events": events}
     conn.execute("UPDATE runs SET status=?, intent=?, specialists=?, finished_at=? WHERE id=?",
                  (status, jdump({"intent": interp.intent, "tv": tv["version"] if tv else 1, "response": resp}),
                   jdump(specialists), now_iso(), run_id))
@@ -227,6 +228,7 @@ def _dispatch_multi(conn, inp: CommandInput, parts: list[Interpretation], reply:
         reply.text_lines += sub.text_lines
         reply.questions += sub.questions
         reply.citations += sub.citations
+        reply.visuals += sub.visuals
         buf.deferred += sub.deferred
         if sub.spoken or sub.text_lines:
             spoken.append(sub.spoken or _spoken("\n".join(sub.text_lines)))
@@ -257,6 +259,8 @@ def _agenda(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id: s
         return
     evs = cal["events"]
     zi = ZoneInfo(tz)
+    from jarvis.agents import visuals as V
+    reply.visuals.append(V.calendar(conn, day, 1, tz, cal))
 
     def t(e):
         return "All day" if e["all_day"] else datetime.fromisoformat(e["start"]).astimezone(zi).strftime("%-I:%M %p")
@@ -301,6 +305,8 @@ def _weather(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id: 
         reply.spoken = "I couldn't reach the weather service."
         return
     f = W.forecast_for(data, day)
+    from jarvis.agents import visuals as V
+    reply.visuals.append(V.weather(data, loc, day))
     if not f:
         reply.say(f"I only have a 7-day forecast; {day.strftime('%a %b %-d')} is outside it.")
         return
