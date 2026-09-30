@@ -135,6 +135,53 @@ class AnthropicProvider(LLMProvider):
         return {"text": text, "data": data, "usage": usage, "model": model, "request_id": getattr(resp, "_request_id", None)}
 
 
+def _agent_step_anthropic(self, conn, *, system, messages, tools, max_tokens=4000, effort=None, run_id=None,
+                          max_web_searches=0) -> dict:
+    """One model step of the agent loop. Returns {"content": [blocks], "stop_reason", "usage", "model"}.
+    Content blocks are returned as the SDK objects so thinking/server-tool blocks round-trip unchanged."""
+    import anthropic
+
+    key = _api_key(conn)
+    if not key:
+        raise LLMError("not_configured", "No Anthropic API key configured.")
+    b = budget.budget_settings(conn)
+    model = _model_for(conn, "agent")
+    max_tokens = min(max_tokens, max(2000, int(b.get("max_output_tokens") or 4000)))
+    est_in = sum(len(str(m.get("content"))) for m in messages) // 3 + len(system) // 3 + 2500
+    try:
+        res_id = budget.reserve(conn, "agent", model, est_in, max_tokens, False, run_id, max_web_searches=max_web_searches)
+    except budget.BudgetBlocked as e:
+        raise LLMError("budget", e.message) from e
+    client = anthropic.Anthropic(api_key=key, max_retries=1, timeout=120.0)
+    t = time.perf_counter()
+    try:
+        # Automatic prompt caching: tool definitions + system + prior steps are re-read at ~10% cost within a command.
+        resp = client.messages.create(model=model, max_tokens=max_tokens, system=system, messages=messages, tools=tools,
+                                      output_config={"effort": effort or "medium"}, cache_control={"type": "ephemeral"})
+    except anthropic.AuthenticationError as e:
+        budget.release(conn, res_id)
+        raise LLMError("auth", "Anthropic API key was rejected.") from e
+    except anthropic.RateLimitError as e:
+        budget.release(conn, res_id)
+        raise LLMError("rate_limit", "Anthropic rate limit reached; try again shortly.") from e
+    except anthropic.BadRequestError as e:
+        budget.release(conn, res_id)
+        raise LLMError("bad_request", f"Model request rejected: {e.message}") from e
+    except anthropic.APIStatusError as e:
+        budget.release(conn, res_id)
+        raise LLMError("server", f"Model provider error ({e.status_code}).") from e
+    except anthropic.APIConnectionError as e:
+        budget.release(conn, res_id)
+        raise LLMError("network", "Could not reach the model provider.") from e
+    usage = resp.usage.model_dump() if hasattr(resp.usage, "model_dump") else dict(resp.usage)
+    budget.reconcile(conn, res_id, model, usage, getattr(resp, "_request_id", None))
+    record_latency(conn, "model_call", (time.perf_counter() - t) * 1000, {"purpose": "agent", "model": model})
+    return {"content": list(resp.content), "stop_reason": resp.stop_reason, "usage": usage, "model": model}
+
+
+AnthropicProvider.agent_step = _agent_step_anthropic
+
+
 class ScriptedLLM(LLMProvider):
     """Contract mock. Returns scripted outputs and records exact requests. NOT evidence of model accuracy."""
 
@@ -148,6 +195,23 @@ class ScriptedLLM(LLMProvider):
 
     def available(self, conn) -> tuple[bool, str]:
         return True, "contract mock"
+
+    def agent_step(self, conn, *, system, messages, tools, max_tokens=4000, effort=None, run_id=None, max_web_searches=0):
+        """Scripted agent steps: each queued response is {"content": [block dicts], "stop_reason": ...} or a callable(req)."""
+        import copy
+        req = {"system": system, "messages": copy.deepcopy(messages), "tools": tools,
+               "content": copy.deepcopy(messages[-1]["content"]) if messages else None}
+        self.requests.append(req)
+        if not self.responses:
+            raise LLMError("not_configured", "ScriptedLLM has no response queued.")
+        out = self.responses.pop(0)
+        if callable(out):
+            out = out(req)
+        if isinstance(out, LLMError):
+            raise out
+        if isinstance(out, str):
+            out = {"content": [{"type": "text", "text": out}], "stop_reason": "end_turn"}
+        return {"usage": {}, "model": "scripted-mock", **out}
 
     def complete(self, conn, *, purpose, system, content, schema=None, max_tokens=None, effort=None, scheduled=False,
                  run_id=None, role="chief") -> dict:

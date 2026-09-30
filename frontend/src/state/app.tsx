@@ -166,6 +166,8 @@ interface ConversationCtx {
   ensureConversation: () => Promise<string>;
   thread: ThreadEntry[];
   sending: boolean;
+  /** Live activity lines for the command in flight (tool use, web searches…). */
+  liveEvents: string[];
   send: (req: Omit<CommandRequest, 'conversation_id' | 'tz'> & { tz?: string }) => Promise<CommandResponse | null>;
   pushEntry: (e: ThreadEntry) => void;
   updateResponse: (runId: string, fn: (r: CommandResponse) => CommandResponse) => void;
@@ -188,6 +190,7 @@ function useConversationState(speak: (t: string | null | undefined) => void): Co
   });
   const [thread, setThread] = useState<ThreadEntry[]>([]);
   const [sending, setSending] = useState(false);
+  const [liveEvents, setLiveEvents] = useState<string[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const pending = useRef<Promise<string> | null>(null);
 
@@ -225,10 +228,27 @@ function useConversationState(speak: (t: string | null | undefined) => void): Co
   const send = useCallback<ConversationCtx['send']>(
     async (req) => {
       setSending(true);
+      setLiveEvents([]);
       pushEntry({ kind: 'user', id: localId('u'), text: req.text, channel: req.channel, at: req.captured_at });
+      const hex = Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => b.toString(16).padStart(2, '0')).join('');
+      const client_run_id = `run_${hex}`;
+      let polling = true;
+      const poll = async () => {
+        while (polling) {
+          await new Promise((r) => setTimeout(r, 700));
+          if (!polling) break;
+          try {
+            const evs = await api.runEvents(client_run_id);
+            setLiveEvents(evs.map((e) => e.message));
+          } catch {
+            /* run not created yet */
+          }
+        }
+      };
+      void poll();
       try {
         const conversation_id = await ensureConversation();
-        const resp = await api.command({ ...req, tz: req.tz ?? localTz(), conversation_id });
+        const resp = await api.command({ ...req, tz: req.tz ?? localTz(), conversation_id, client_run_id });
         pushEntry({ kind: 'response', id: resp.run_id || localId('r'), resp });
         speak(resp.message?.spoken_text);
         return resp;
@@ -236,7 +256,9 @@ function useConversationState(speak: (t: string | null | undefined) => void): Co
         pushEntry({ kind: 'error', id: localId('e'), text: errorMessage(e) });
         return null;
       } finally {
+        polling = false;
         setSending(false);
+        setLiveEvents([]);
       }
     },
     [ensureConversation, pushEntry, speak],
@@ -257,7 +279,7 @@ function useConversationState(speak: (t: string | null | undefined) => void): Co
     setThread([]);
   }, []);
 
-  return { conversationId, ensureConversation, thread, sending, send, pushEntry, updateResponse, newConversation, loadError };
+  return { conversationId, ensureConversation, thread, sending, liveEvents, send, pushEntry, updateResponse, newConversation, loadError };
 }
 
 // ---------------- Provider ----------------

@@ -308,6 +308,9 @@ def classify(text: str, *, has_active_proposal: bool, has_attachments: bool, cap
     if re.search(r"\b(summari[sz]e|recap)\b", low):
         return Interpretation("summarize", payload=t)
 
+    if re.match(r"^\s*(?:please\s+|can you\s+|could you\s+)?(?:look up|look into|research|find out|search(?: for)?|google|"
+                r"check (?:if|whether|when|what|how|the)|see (?:if|whether)|tell me|show me|give me|explain)\b", low):
+        return Interpretation("question", payload=t)
     cs = extract_commitments(t, captured_at, tz)
     is_question = t.endswith("?") or re.match(r"^(what|when|where|who|why|how|which|is|are|do|does|can|should|will|am)\b", low)
     capture_signal = re.match(r"^\s*(i (also )?(need|have|should|must|gotta)|remind me|add|todo|to-do|don't let me forget|i've got)",
@@ -330,7 +333,10 @@ def _correction(t: str, captured_at: datetime, tz: str) -> Interpretation | None
         return Interpretation("remove_item", item_refs=refs, ref_text=m.group(2).strip(" .!"))
     # "change Thursday to Friday", "Friday not Thursday", "make that Friday", "move the second one to Friday"
     m = re.search(r"\b(?:change|switch|move)\s+(.+?)\s+to\s+(.+)$", low) or re.search(r"\bmake (that|it|the .+?) (.+)$", low) \
-        or re.search(r"^(?:actually,?\s*|no,?\s*)(.+)$", low)
+        or re.search(r"^(?:actually,?\s*|no,?\s*)(.+\bnot\b.+)$", low)
+    if m and re.search(r"\b(what|how|when|where|why|who|weather|calendar|search|look up|tell me|give me)\b", low) and \
+            not re.search(r"\b(change|switch|move|make (that|it|the))\b", low):
+        return None
     if not m:
         return None
     target_part, new_part = (m.group(1), m.group(2)) if m.lastindex and m.lastindex >= 2 else ("that", m.group(1))

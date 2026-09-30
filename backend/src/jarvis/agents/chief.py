@@ -16,6 +16,8 @@ from datetime import date, datetime
 from jarvis.actions import proposals as P
 from jarvis.agents import context as ctx
 from jarvis.agents import specialists as S
+from jarvis.agents import agent
+from jarvis.llm.provider import LLMError
 from jarvis.agents.interpret import Commitment, Interpretation, classify, segment_utterance
 from jarvis.config import get_settings
 from jarvis.core import timeparse
@@ -39,6 +41,7 @@ class CommandInput:
     speech_playing: bool = False
     attachments: list[str] | None = None
     session_id: str | None = None
+    client_run_id: str | None = None
 
 
 class Reply:
@@ -99,7 +102,8 @@ def handle(conn: sqlite3.Connection, inp: CommandInput) -> dict:
     else:
         inp.capture_id = _typed_capture(conn, inp)
 
-    run_id = new_id("run")
+    run_id = inp.client_run_id if inp.client_run_id and not row(conn, "SELECT 1 FROM runs WHERE id=?", (inp.client_run_id,)) \
+        else new_id("run")
     conn.execute("INSERT INTO runs (id, conversation_id, capture_id, kind, status, limits, started_at) VALUES (?,?,?,?,?,?,?)",
                  (run_id, inp.conversation_id, inp.capture_id, "command", "running", jdump(RUN_LIMITS), now_iso()))
     conn.execute("INSERT INTO messages (id, conversation_id, role, text, capture_id, run_id, created_at) VALUES (?,?,?,?,?,?,?)",
@@ -108,11 +112,24 @@ def handle(conn: sqlite3.Connection, inp: CommandInput) -> dict:
     captured = parse_iso(inp.captured_at)
     interp = classify(inp.text, has_active_proposal=bool(active), has_attachments=bool(inp.attachments),
                       captured_at=captured, tz=inp.tz)
-    parts = _plan_requests(inp, interp, bool(active), captured)
     reply = Reply()
     specialists: list[str] = []
+    use_agent = interp.intent not in DETERMINISTIC_ONLY and agent.available(conn)[0]
+    parts = [] if use_agent else _plan_requests(inp, interp, bool(active), captured)
     try:
-        if len(parts) <= 1:
+        if use_agent:
+            try:
+                agent.run(conn, inp, reply, run_id, specialists)
+                interp = Interpretation("agent")
+            except LLMError as e:
+                run_event(conn, run_id, "error", f"Reasoning model unavailable ({e.kind}); offline mode")
+                reply = Reply()
+                reply.say(f"(My reasoning model is unavailable — {e.message} Using offline mode.)")
+                parts = _plan_requests(inp, interp, bool(active), captured)
+                use_agent = False
+        if use_agent:
+            pass
+        elif len(parts) <= 1:
             run_event(conn, run_id, "route", f"Understood as: {interp.intent.replace('_', ' ')}")
             _dispatch(conn, inp, parts[0] if parts else interp, reply, run_id, active, captured, tv, specialists)
         else:
@@ -151,6 +168,9 @@ def handle(conn: sqlite3.Connection, inp: CommandInput) -> dict:
         record_latency(conn, "proposal", (time.perf_counter() - t0) * 1000)
     return resp
 
+
+# These never go through the model: approvals, consent and plan edits are decided by deterministic code only.
+DETERMINISTIC_ONLY = {"approve", "vague_consent", "cancel", "correct", "remove_item"}
 
 SOLO_INTENTS = {"approve", "vague_consent", "cancel", "correct", "remove_item", "retrieve_actions", "remember",
                 "forget_memory", "meeting_debrief", "local_file", "knowledge", "summarize"}

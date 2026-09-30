@@ -207,6 +207,42 @@ function renderUnknown(v: unknown): React.ReactNode {
   );
 }
 
+function BrainCard() {
+  const brain = useAsync(() => api.brain(), []);
+  return (
+    <Card title="JARVIS brain">
+      <Async state={brain}>
+        {(b) => (
+          <>
+            <p>
+              <strong className={b.mode === 'v2_agent' ? 'ok-text' : 'warn-text'}>
+                {b.mode === 'v2_agent' ? 'V2 reasoning online' : 'Offline mode (rule-based)'}
+              </strong>{' '}
+              <span className="muted small">· model {b.model}</span>
+            </p>
+            {b.reason && <p className="warn-text small">Why offline: {b.reason}</p>}
+            <p className="muted small">
+              In V2, JARVIS reads each command, decides what you want and picks its tools ({b.tools?.length ?? 0} built in, plus web
+              search). {b.notes}
+            </p>
+            <label className="auto-send">
+              <input
+                type="checkbox"
+                checked={b.web_research}
+                onChange={async (e) => {
+                  await api.setResearch(e.target.checked);
+                  brain.setData({ ...b, web_research: e.target.checked });
+                }}
+              />{' '}
+              Allow web research (search + read pages)
+            </label>
+          </>
+        )}
+      </Async>
+    </Card>
+  );
+}
+
 export function BudgetSection() {
   const budget = useAsync(() => api.budget(), []);
   const [draft, setDraft] = useState<Budget | null>(null);
@@ -216,6 +252,8 @@ export function BudgetSection() {
     if (budget.data) setDraft(budget.data);
   }, [budget.data]);
   return (
+    <>
+    <BrainCard />
     <Card title="Budget & model usage">
       <Async state={budget}>
         {(b) => (
@@ -293,6 +331,7 @@ export function BudgetSection() {
         )}
       </Async>
     </Card>
+    </>
   );
 }
 

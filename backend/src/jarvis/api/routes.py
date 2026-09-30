@@ -297,6 +297,7 @@ class CommandIn(BaseModel):
     tz: str = "America/Chicago"
     speech_playing: bool = False
     attachments: list[str] = []
+    client_run_id: str | None = Field(None, pattern=r"^run_[a-f0-9]{20}$")
 
 
 @router.post("/commands")
@@ -308,7 +309,7 @@ def command(body: CommandIn, session=Depends(require_session), conn=Depends(db))
     inp = chief.CommandInput(conversation_id=body.conversation_id or "", text=body.text, channel=body.channel,
                              captured_at=body.captured_at or now_iso(), tz=body.tz, capture_id=body.capture_id,
                              transcript_version=body.transcript_version, speech_playing=body.speech_playing,
-                             attachments=body.attachments, session_id=session["id"])
+                             attachments=body.attachments, session_id=session["id"], client_run_id=body.client_run_id)
     try:
         return chief.handle(conn, inp)
     except ValueError as e:
@@ -1099,6 +1100,20 @@ class SettingsPatch(BaseModel):
     privacy: dict[str, Any] | None = None
     notifications: dict[str, Any] | None = None
     models: dict[str, str] | None = None
+    research: dict[str, Any] | None = None
+
+
+@router.get("/brain")
+def brain(conn=Depends(db)):
+    from jarvis.agents import agent
+    ok, why = agent.available(conn)
+    data = jload(row(conn, "SELECT data FROM user_settings WHERE id=1")["data"], {})
+    return {"mode": "v2_agent" if ok else "offline", "reason": None if ok else why,
+            "web_research": data.get("research", {}).get("web_enabled", True),
+            "model": (data.get("models") or {}).get("agent") or get_settings().model_default,
+            "tools": [t["name"] for t in agent.CLIENT_TOOLS],
+            "notes": "Changes to Todoist/Calendar/files are always proposals you approve. Web search costs ~$0.01 per search "
+                     "plus model tokens, all counted against your budget."}
 
 
 @router.patch("/settings")
@@ -1106,7 +1121,7 @@ def patch_settings(body: SettingsPatch, conn=Depends(db)):
     with tx(conn):
         r = row(conn, "SELECT * FROM user_settings WHERE id=1")
         data = jload(r["data"], {})
-        for k in ("voice", "privacy", "notifications", "models"):
+        for k in ("voice", "privacy", "notifications", "models", "research"):
             v = getattr(body, k)
             if v is not None:
                 data[k] = data.get(k, {}) | v

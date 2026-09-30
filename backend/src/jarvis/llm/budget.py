@@ -18,6 +18,7 @@ PRICING = {
     "claude-haiku-4-5": (1.00, 5.00),
 }
 CACHE_READ_MULT = 0.1
+WEB_SEARCH_PER_REQUEST = 0.01   # $10 per 1,000 searches (web fetch is billed as tokens only)
 CACHE_WRITE_MULT = 1.25
 
 
@@ -68,7 +69,7 @@ def spent(conn, since: str) -> tuple[float, float]:
 
 
 def reserve(conn: sqlite3.Connection, purpose: str, model: str, est_input_tokens: int, max_output_tokens: int,
-            scheduled: bool = False, run_id: str | None = None) -> str:
+            scheduled: bool = False, run_id: str | None = None, max_web_searches: int = 0) -> str:
     with tx(conn):
         b = budget_settings(conn)
         if not b.get("chosen"):
@@ -78,6 +79,8 @@ def reserve(conn: sqlite3.Connection, purpose: str, model: str, est_input_tokens
         if scheduled and not b.get("background_paid_enabled"):
             raise BudgetBlocked("background_disabled", "Paid background work is disabled; briefing generated without the model.")
         est = estimate_cost(model, est_input_tokens, max_output_tokens)
+        if est is not None:
+            est += max_web_searches * WEB_SEARCH_PER_REQUEST
         if est is None:
             if scheduled or b.get("daily_limit_usd") is not None or b.get("monthly_limit_usd") is not None:
                 raise BudgetBlocked("pricing_unknown", f"No pricing configured for model '{model}'; paid call refused.")
@@ -101,6 +104,8 @@ def reserve(conn: sqlite3.Connection, purpose: str, model: str, est_input_tokens
 def reconcile(conn, reservation_id: str, model: str, usage: dict, request_id: str | None) -> float:
     cost = estimate_cost(model, usage.get("input_tokens", 0), usage.get("output_tokens", 0),
                          usage.get("cache_read_input_tokens", 0) or 0, usage.get("cache_creation_input_tokens", 0) or 0) or 0.0
+    stu = usage.get("server_tool_use") or {}
+    cost += (stu.get("web_search_requests") or 0) * WEB_SEARCH_PER_REQUEST
     with tx(conn):
         conn.execute("INSERT INTO usage_records (id, reservation_id, model, input_tokens, output_tokens, cache_read_tokens, "
                      "cache_write_tokens, cost_usd, measured, request_id, created_at) VALUES (?,?,?,?,?,?,?,?,1,?,?)",

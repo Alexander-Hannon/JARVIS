@@ -216,6 +216,11 @@ export const api = {
   settings: () => request<T.Settings>('/api/settings'),
   patchSettings: (p: Partial<T.Settings>) => request<T.Settings>('/api/settings', { method: 'PATCH', json: p }),
   budget: () => request<T.Budget>('/api/budget'),
+  brain: () =>
+    request<{ mode: 'v2_agent' | 'offline'; reason: string | null; web_research: boolean; model: string; tools: string[]; notes: string }>(
+      '/api/brain',
+    ),
+  setResearch: (web_enabled: boolean) => request<unknown>('/api/settings', { method: 'PATCH', json: { research: { web_enabled } } }),
   patchBudget: (b: Partial<T.Budget>) => request<T.Budget>('/api/budget', { method: 'PATCH', json: b }),
   doctor: () => request<{ checks: T.DoctorCheck[] }>('/api/doctor'),
   latency: () => request<T.LatencyMetrics>('/api/metrics/latency'),
