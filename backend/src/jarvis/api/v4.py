@@ -504,3 +504,120 @@ def telegram_notify(body: NotifyIn, conn=Depends(db)):
     conn.execute("UPDATE integration_accounts SET config=? WHERE id=?", (_json.dumps(acct["config"] | {"notify": body.notify}),
                                                                          acct["id"]))
     return TG.status(conn)
+
+
+# ------------------------------------------------------------------------------------------------ sandbox / Workbench
+def _sbx(fn, *a):
+    from jarvis.sandbox import service as SB
+    try:
+        return fn(*a)
+    except SB.SandboxError as e:
+        raise HTTPException(409 if e.code == "unavailable" else 400, {"code": e.code, "message": e.message}) from None
+
+
+@router.get("/sandbox")
+def sandbox_status(conn=Depends(db)):
+    from jarvis.sandbox import service as SB
+    data = jload(row(conn, "SELECT data FROM user_settings WHERE id=1")["data"], {}) or {}
+    return SB.status(conn) | {"computer_use": (data.get("sandbox") or {}).get("computer_use", True)}
+
+
+@router.post("/sandbox/start")
+def sandbox_start(conn=Depends(db)):
+    from jarvis.sandbox import service as SB
+    _sbx(SB.ensure_started, conn)
+    return SB.status(conn)
+
+
+@router.post("/sandbox/stop")
+def sandbox_stop(conn=Depends(db)):
+    from jarvis.sandbox import service as SB
+    SB.get_runtime().stop()
+    SB._log(conn, None, "lifecycle", "Stopped by AJ")
+    return SB.status(conn)
+
+
+@router.post("/sandbox/reset")
+def sandbox_reset(conn=Depends(db)):
+    from jarvis.sandbox import service as SB
+    SB.get_runtime().reset()
+    SB.close_network(conn)
+    SB._log(conn, None, "lifecycle", "Reset by AJ (workspace erased)")
+    return SB.status(conn)
+
+
+@router.post("/sandbox/build")
+def sandbox_build(conn=Depends(db)):
+    from jarvis.core import jobs
+    jobs.enqueue(conn, "sandbox_build", {}, dedupe_key=f"sbxbuild:{int(time.time() // 600)}", max_attempts=1)
+    return {"queued": True, "note": "Building the sandbox image takes a few minutes; the worker does it in the background."}
+
+
+@router.post("/sandbox/network/close")
+def sandbox_close_network(conn=Depends(db)):
+    from jarvis.sandbox import service as SB
+    return SB.close_network(conn)
+
+
+@router.post("/sandbox/settings")
+def sandbox_settings(body: dict, conn=Depends(db)):
+    import json as _json
+    data = jload(row(conn, "SELECT data FROM user_settings WHERE id=1")["data"], {}) or {}
+    data.setdefault("sandbox", {})["computer_use"] = bool(body.get("computer_use", True))
+    conn.execute("UPDATE user_settings SET data=? WHERE id=1", (_json.dumps(data),))
+    return sandbox_status(conn)
+
+
+@router.get("/sandbox/history")
+def sandbox_history(limit: int = 100, conn=Depends(db)):
+    from jarvis.sandbox import service as SB
+    return SB.history(conn, limit)
+
+
+@router.get("/sandbox/shots/{shot_id}")
+def sandbox_shot(shot_id: str):
+    from fastapi.responses import FileResponse
+
+    from jarvis.sandbox import service as SB
+    p = SB.shot_path(shot_id)
+    if not p:
+        raise HTTPException(404)
+    return FileResponse(p, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
+
+
+# ------------------------------------------------------------------------------------------------ skills
+class SkillFolderIn(BaseModel):
+    folder: str
+
+
+def _sk(fn, *a):
+    from jarvis.skills import service as SK
+    try:
+        return fn(*a)
+    except SK.SkillError as e:
+        raise HTTPException(400, {"code": e.code, "message": e.message}) from None
+
+
+@router.get("/skills")
+def skills_list(conn=Depends(db)):
+    from jarvis.skills import service as SK
+    return SK.list_skills(conn)
+
+
+@router.post("/skills/install")
+def skills_install(body: SkillFolderIn, conn=Depends(db)):
+    from jarvis.skills import service as SK
+    return _sk(SK.install_from_folder, conn, body.folder)
+
+
+@router.post("/skills/{name}/enabled")
+def skills_enabled(name: str, body: EnabledIn, conn=Depends(db)):
+    from jarvis.skills import service as SK
+    return _sk(SK.set_enabled, conn, name, body.enabled)
+
+
+@router.delete("/skills/{name}")
+def skills_remove(name: str, conn=Depends(db)):
+    from jarvis.skills import service as SK
+    _sk(SK.remove, conn, name)
+    return {"ok": True}

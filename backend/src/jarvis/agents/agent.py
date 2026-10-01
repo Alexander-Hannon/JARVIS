@@ -222,7 +222,7 @@ def run(conn, inp, reply, run_id: str, specialists: list[str], scope: Scope = CO
         run_event(conn, run_id, "tool", f"Attached {len(ev['manifest'])} document block(s) (visual content included)")
     user_content.append({"type": "text", "text": inp.text})
     messages = _history(conn, inp.conversation_id, inp.text) + [{"role": "user", "content": user_content}]
-    tools = T.schemas(conn, scope.allows) + (server_tools(conn) if scope.web else [])
+    tools = T.schemas(conn, scope.allows) + (server_tools(conn) if scope.web else []) + computer_tools(conn, scope)
     run_event(conn, run_id, "route", "Thinking about what you need")
     t0 = time.monotonic()
     final_text, tool_calls, web_searches = "", 0, 0
@@ -266,8 +266,13 @@ def run(conn, inp, reply, run_id: str, specialists: list[str], scope: Scope = CO
         uses = [b for b in content if _bt(b, "type") == "tool_use"]
         if stop == "tool_use" and uses:
             results = []
+            computer_failed = False
             for b in uses:
                 tool_calls += 1
+                if _bt(b, "toolset_name") == "computer":
+                    res, computer_failed = computer_result(conn, run_id, b, computer_failed, tool_calls > MAX_TOOL_CALLS)
+                    results.append(res)
+                    continue
                 if tool_calls > MAX_TOOL_CALLS:
                     out = json.dumps({"error": "tool-call limit reached; answer with what you have"})
                 else:
@@ -299,6 +304,42 @@ def run(conn, inp, reply, run_id: str, specialists: list[str], scope: Scope = CO
             reply.say("(Pick the Todoist project on the card below to unlock approval.)")
     reply.spoken = final_text or None   # chief runs speechify() on it
     run_event(conn, run_id, "status", f"Finished ({tool_calls} tool call(s), {web_searches} web search(es))")
+
+
+# ------------------------------------------------------------------------------------------------ computer use
+COMPUTER_HALT = "Not executed: an earlier computer action in this turn failed."
+
+
+def computer_tools(conn, scope: Scope) -> list[dict]:
+    """The computer toolset drives the SANDBOX's virtual desktop (never the host). Offered only when the sandbox
+    runtime is available, AJ hasn't turned desktop control off, and the run's scope includes the sandbox."""
+    if scope.families is not None and "sandbox" not in scope.families:
+        return []
+    from jarvis.agents.tools.sandbox import sandbox_available
+    data = jload((row(conn, "SELECT data FROM user_settings WHERE id=1") or {}).get("data"), {}) or {}
+    if not (data.get("sandbox") or {}).get("computer_use", True) or not sandbox_available(conn):
+        return []
+    return [{"type": "computer_toolset_20260801"}]
+
+
+def computer_result(conn, run_id: str, b: Any, failed_before: bool, over_limit: bool) -> tuple[dict, bool]:
+    import base64
+
+    from jarvis.sandbox import service as SB
+    res = {"type": "tool_result", "tool_use_id": _bt(b, "id"), "toolset_name": "computer"}
+    if failed_before or over_limit:
+        return res | {"content": COMPUTER_HALT if failed_before else "Tool-call limit reached.", "is_error": True}, True
+    name = _bt(b, "name")
+    try:
+        out = SB.computer(conn, run_id, name, _bt(b, "input") or {})
+    except (SB.SandboxError, KeyError, ValueError, TypeError) as e:
+        return res | {"content": f"Error: {getattr(e, 'message', None) or type(e).__name__}", "is_error": True}, True
+    if name in ("screenshot", "zoom"):
+        run_event(conn, run_id, "tool", "Looking at the sandbox screen")
+        return res | {"content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                                                "data": base64.b64encode(out["image"]).decode()}}]}, False
+    run_event(conn, run_id, "tool", f"Sandbox desktop: {name.replace('_', ' ')}")
+    return res | {"content": out.get("text") or "OK"}, False
 
 
 def _family(tool: str) -> str:

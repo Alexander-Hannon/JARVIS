@@ -129,6 +129,16 @@ register(ActionType("mcp.call.auto", "mcp", "jarvis.actions.handlers_mcp:h_mcp_c
                     "Run an MCP tool you marked as safe to automate"))
 
 
+# Network egress for the sandbox is a hard T2: always AJ's explicit approval, limited domains, auto-expiring.
+register(ActionType("sandbox.network", "sandbox", "jarvis.actions.handlers_sandbox:h_network", Tier.T2, "native",
+                    "Open the sandbox's internet access to specific domains for a while"))
+
+
+# A skill becomes standing instructions for the agent: always AJ's explicit review of the exact text.
+register(ActionType("skill.install", "skills", "jarvis.actions.handlers_sandbox:h_skill_install", Tier.T2, "native",
+                    "Install a skill (saved instructions JARVIS will follow)"))
+
+
 def get(name: str) -> ActionType | None:
     return REGISTRY.get(name)
 

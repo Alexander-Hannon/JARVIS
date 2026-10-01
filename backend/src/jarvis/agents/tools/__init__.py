@@ -18,7 +18,7 @@ from typing import Any, Literal
 
 Risk = Literal["read", "propose", "act"]
 TOOL_SEARCH = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
-MODULES = ("planning", "knowledge", "workspace", "propose", "mail", "apps")
+MODULES = ("planning", "knowledge", "workspace", "propose", "mail", "apps", "sandbox", "skill_tools")
 
 
 @dataclass(frozen=True)
@@ -66,10 +66,14 @@ def load_all() -> dict[str, Tool]:
 def dynamic(conn) -> list[Tool]:
     """Tools that come from AJ's reviewed MCP servers (built per request from the DB, never cached across changes)."""
     from jarvis.agents.tools.mcp_tools import tools as mcp_tools
-    try:
-        return mcp_tools(conn)
-    except Exception:   # noqa: BLE001 — a broken MCP config must never take the agent down
-        return []
+    from jarvis.agents.tools.skill_tools import tools as skill_tools
+    out: list[Tool] = []
+    for src in (mcp_tools, skill_tools):
+        try:
+            out += src(conn)
+        except Exception:   # noqa: BLE001 — a broken MCP config or skill folder must never take the agent down
+            continue
+    return out
 
 
 def offered(conn) -> list[Tool]:
@@ -93,7 +97,7 @@ def get(name: str) -> Tool | None:
 def lookup(conn, name: str) -> Tool | None:
     """Static tool, or a currently-offered MCP tool (re-derived from the DB at call time)."""
     t = get(name)
-    if t is None and name.startswith("mcp__"):
+    if t is None and name.startswith(("mcp__", "skill__")):
         t = next((d for d in dynamic(conn) if d.name == name), None)
     return t
 
@@ -101,5 +105,7 @@ def lookup(conn, name: str) -> Tool | None:
 def family(name: str) -> str:
     if name.startswith("mcp__"):
         return "mcp"
+    if name.startswith("skill__"):
+        return "skills"
     t = get(name)
     return t.family if t else "chief"

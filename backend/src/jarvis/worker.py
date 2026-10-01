@@ -52,6 +52,9 @@ def handle_job(conn, job: dict, worker_id: str) -> None:
         elif kind == "todoist_sync":
             from jarvis.integrations import service
             jobs.complete(conn, job["id"], worker_id, service.todoist_sync(conn))
+        elif kind == "sandbox_build":
+            from jarvis.sandbox.runtime import DockerRuntime
+            jobs.complete(conn, job["id"], worker_id, {"log_tail": DockerRuntime().build()[-2000:]})
         elif kind == "telegram_send":
             from jarvis.channels import telegram
             jobs.complete(conn, job["id"], worker_id, telegram.send_notification(conn, payload["notification_id"]))
