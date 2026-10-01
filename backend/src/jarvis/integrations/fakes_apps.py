@@ -270,3 +270,47 @@ class FakeSimpleFin(_FaultMixin):
 
     def accounts(self, start_unix=None, end_unix=None) -> dict:
         return self._run("accounts", (), lambda: self.data)
+
+
+class FakeTelegram(_FaultMixin):
+    """Telegram Bot API fake: tests push updates in; sent messages/callback answers are recorded."""
+    name = "telegram"
+    simulated = True
+
+    def __init__(self) -> None:
+        self.updates: list[dict] = []
+        self.sent: list[dict] = []
+        self.answers: list[str] = []
+        self.files: dict[str, bytes] = {}
+        self._uid = itertools.count(1)
+        self._mid = itertools.count(100)
+        self._init_faults()
+
+    def push_message(self, chat: int, text: str = "", date: int | None = None, **extra) -> None:
+        from jarvis.core.util import utcnow
+        self.updates.append({"update_id": next(self._uid), "message": {
+            "message_id": next(self._mid), "date": date or int(utcnow().timestamp()), "chat": {"id": chat, "first_name": "AJ"},
+            "from": {"username": "aj"}, "text": text, **extra}})
+
+    def push_callback(self, chat: int, data: str) -> None:
+        self.updates.append({"update_id": next(self._uid), "callback_query": {
+            "id": f"cb{next(self._uid)}", "data": data, "message": {"message_id": 1, "chat": {"id": chat}}}})
+
+    def get_me(self) -> dict:
+        return {"id": 42, "username": "jarvis_test_bot"}
+
+    def get_updates(self, offset, limit: int = 50) -> list[dict]:
+        return [u for u in self.updates if offset is None or u["update_id"] >= offset][:limit]
+
+    def send(self, chat_id: int, text: str, buttons=None) -> dict:
+        self.sent.append({"chat": chat_id, "text": text, "buttons": buttons})
+        return {"message_id": next(self._mid)}
+
+    def answer_callback(self, callback_id: str, text: str) -> None:
+        self.answers.append(text)
+
+    def clear_buttons(self, chat_id: int, message_id: int) -> None:
+        pass
+
+    def download_file(self, file_id: str, max_bytes: int = 0) -> bytes:
+        return self.files[file_id]

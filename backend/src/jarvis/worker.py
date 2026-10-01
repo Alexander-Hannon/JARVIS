@@ -52,6 +52,9 @@ def handle_job(conn, job: dict, worker_id: str) -> None:
         elif kind == "todoist_sync":
             from jarvis.integrations import service
             jobs.complete(conn, job["id"], worker_id, service.todoist_sync(conn))
+        elif kind == "telegram_send":
+            from jarvis.channels import telegram
+            jobs.complete(conn, job["id"], worker_id, telegram.send_notification(conn, payload["notification_id"]))
         elif kind == "run_mission":
             from jarvis.missions import service as missions
             jobs.complete(conn, job["id"], worker_id, {"status": missions.run_now(conn, payload["mission_id"])["last_status"]})
@@ -98,6 +101,11 @@ def run_once(conn, worker_id: str, max_jobs: int = 20) -> int:
 def maybe_periodic(conn, last: dict) -> None:
     """Low-frequency data refresh — no model calls, no polling agents."""
     now = time.monotonic()
+    from jarvis.channels import telegram
+    try:
+        telegram.poll(conn)            # outbound short-poll; only does work when a bot is connected
+    except Exception:  # noqa: BLE001 — channel trouble must not stop the worker
+        log.exception("telegram poll failed")
     from jarvis.integrations import accounts as A
     if now - last.get("ics", 0) > 3600 and A.get_account(conn, "ics"):
         jobs.enqueue(conn, "ics_refresh", {}, dedupe_key=f"ics:{int(time.time() // 3600)}")

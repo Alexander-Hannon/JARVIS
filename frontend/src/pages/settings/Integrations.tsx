@@ -3,6 +3,7 @@ import { api, errorMessage } from '../../api/client';
 import type { GoogleCalendar, Integration, Mailbox } from '../../api/types';
 import { AppConnectors } from '../../components/AppConnectors';
 import { McpServers } from '../../components/McpServers';
+import { TelegramCard } from '../../components/TelegramCard';
 import { Async, Badge, Card, Empty, ErrorBox, KV, ReasonButton, SecretForm, StateBadge } from '../../components/ui';
 import { fmtDateTime, fmtRelative, humanValue, textOf } from '../../lib/format';
 import { useAsync } from '../../lib/hooks';
@@ -660,6 +661,7 @@ export function IntegrationsSection() {
       <EmailSection integrations={list} onChanged={reload} />
       <AppConnectors />
       <McpServers />
+      <TelegramCard />
       <IcsSection integration={find('ics')} onChanged={reload} />
       <GithubSection onChanged={reload} />
       <Card title="Anthropic (reasoning model)" id="connect-anthropic">

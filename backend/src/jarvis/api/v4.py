@@ -449,3 +449,58 @@ def missions_delete(mid: str, conn=Depends(db)):
     from jarvis.missions import service as M
     _msn(M.delete, conn, mid)
     return {"ok": True}
+
+
+# ------------------------------------------------------------------------------------------------ Telegram channel
+class TokenIn(BaseModel):
+    token: str
+
+
+class NotifyIn(BaseModel):
+    notify: bool
+
+
+def _ch(fn, *a):
+    from jarvis.channels import telegram as TG
+    try:
+        return fn(*a)
+    except TG.ChannelError as e:
+        raise HTTPException(400, {"code": e.code, "message": e.message}) from None
+
+
+@router.get("/channels/telegram")
+def telegram_status(conn=Depends(db)):
+    from jarvis.channels import telegram as TG
+    return TG.status(conn)
+
+
+@router.post("/channels/telegram")
+def telegram_connect(body: TokenIn, conn=Depends(db)):
+    from jarvis.channels import telegram as TG
+    return _ch(TG.connect, conn, body.token)
+
+
+@router.post("/channels/telegram/pair")
+def telegram_pair(conn=Depends(db)):
+    from jarvis.channels import telegram as TG
+    return _ch(TG.start_pairing, conn)
+
+
+@router.post("/channels/telegram/unpair")
+def telegram_unpair(conn=Depends(db)):
+    from jarvis.channels import telegram as TG
+    return TG.unpair(conn)
+
+
+@router.post("/channels/telegram/notify")
+def telegram_notify(body: NotifyIn, conn=Depends(db)):
+    import json as _json
+
+    from jarvis.channels import telegram as TG
+    from jarvis.integrations import accounts as A
+    acct = A.get_account(conn, "telegram")
+    if not acct:
+        raise HTTPException(400, {"code": "not_connected", "message": "Connect Telegram first."})
+    conn.execute("UPDATE integration_accounts SET config=? WHERE id=?", (_json.dumps(acct["config"] | {"notify": body.notify}),
+                                                                         acct["id"]))
+    return TG.status(conn)

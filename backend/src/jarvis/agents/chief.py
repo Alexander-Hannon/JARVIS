@@ -42,6 +42,7 @@ class CommandInput:
     attachments: list[str] | None = None
     session_id: str | None = None
     client_run_id: str | None = None
+    origin: str = "command"       # command | channel | mission: decides which auto-approve rules may apply
 
 
 class Reply:
@@ -120,7 +121,8 @@ def handle(conn: sqlite3.Connection, inp: CommandInput) -> dict:
     try:
         if use_agent:
             try:
-                agent.run(conn, inp, reply, run_id, specialists)
+                agent.run(conn, inp, reply, run_id, specialists,
+                          agent.Scope(origin=inp.origin) if inp.origin != "command" else agent.COMMAND_SCOPE)
                 interp = Interpretation("agent")
             except LLMError as e:
                 run_event(conn, run_id, "error", f"Reasoning model unavailable ({e.kind}); offline mode")
@@ -428,7 +430,8 @@ def _dispatch(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id:
 
 
 def _new_proposal(conn, inp: CommandInput, reply: Reply, run_id: str, title: str, specs, summary: str, assumptions, questions,
-                  origin: str = "command"):
+                  origin: str | None = None):
+    origin = origin if origin not in (None, "command") else inp.origin
     if reply.defer:
         reply.deferred.append((title, specs, summary, assumptions, questions))
         return None

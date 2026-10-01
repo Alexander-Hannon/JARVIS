@@ -32,6 +32,9 @@ def notify(conn: sqlite3.Connection, kind: str, title: str, body: str, ref_type:
             jobs.enqueue(conn, "send_push", {"notification_id": nid}, dedupe_key=f"push:{nid}")
         else:
             conn.execute("UPDATE notifications SET push_status='no_subscription' WHERE id=?", (nid,))
+    if push is not False:   # Telegram follows its own toggle; an explicit push=False (quiet hours) silences it too
+        from jarvis.channels import telegram
+        telegram.maybe_forward_notification(conn, nid, kind)
     return nid
 
 

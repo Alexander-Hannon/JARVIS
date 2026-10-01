@@ -616,3 +616,12 @@ export interface McpServer {
   discovered_hash: string | null;
   tools: McpTool[];
 }
+
+export interface TelegramStatus {
+  status: 'not_connected' | 'connected' | 'paired';
+  bot?: string;
+  chat_name?: string | null;
+  account_id?: string;
+  notify?: boolean;
+  simulated?: boolean;
+}

@@ -240,6 +240,11 @@ export const api = {
     request<T.McpServer>(`/api/mcp/${encodeURIComponent(id)}/review`, { json: { modes } }),
   enableMcp: (id: string, enabled: boolean) => request<T.McpServer>(`/api/mcp/${encodeURIComponent(id)}/enabled`, { json: { enabled } }),
   removeMcp: (id: string) => request<unknown>(`/api/mcp/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  telegram: () => request<T.TelegramStatus>('/api/channels/telegram'),
+  connectTelegram: (token: string) => request<T.TelegramStatus>('/api/channels/telegram', { json: { token } }),
+  pairTelegram: () => request<{ code: string; instructions: string; expires_in_s: number }>('/api/channels/telegram/pair', { method: 'POST' }),
+  unpairTelegram: () => request<T.TelegramStatus>('/api/channels/telegram/unpair', { method: 'POST' }),
+  telegramNotify: (notify: boolean) => request<T.TelegramStatus>('/api/channels/telegram/notify', { json: { notify } }),
   vault: () => request<T.VaultStatus>('/api/vault'),
   setVaultIndexed: (rootId: string, enabled: boolean) =>
     request<T.VaultStatus>(`/api/vault/roots/${encodeURIComponent(rootId)}`, { json: { enabled } }),
