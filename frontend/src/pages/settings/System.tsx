@@ -230,11 +230,26 @@ function BrainCard() {
                 type="checkbox"
                 checked={b.web_research}
                 onChange={async (e) => {
-                  await api.setResearch(e.target.checked);
+                  await api.setResearch({ web_enabled: e.target.checked });
                   brain.setData({ ...b, web_research: e.target.checked });
                 }}
               />{' '}
               Allow web research (search + read pages)
+            </label>
+            <label className="field small">
+              <span>
+                Web searches per command: <strong>{b.max_searches}</strong> <span className="muted">(~$0.01 each)</span>
+              </span>
+              <input
+                type="range"
+                min={3}
+                max={50}
+                step={1}
+                value={b.max_searches ?? 15}
+                onChange={(e) => brain.setData({ ...b, max_searches: Number(e.target.value) })}
+                onPointerUp={(e) => void api.setResearch({ max_searches: Number(e.currentTarget.value) })}
+                onKeyUp={(e) => void api.setResearch({ max_searches: Number(e.currentTarget.value) })}
+              />
             </label>
           </>
         )}

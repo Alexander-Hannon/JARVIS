@@ -549,3 +549,75 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: 0.35; }
   .sources { display: flex; flex-wrap: wrap; gap: 6px; }
   .sources > * { flex: 1 1 auto; }
 }
+
+/* ==========================================================================
+   Refinement pass (frontend-design): one display face in sentence case, Orbitron only for the wordmark and
+   clock, mono only for times/numbers. Gold is reserved for "needs you" (now line, approvals, overdue).
+   The bold element is the voice ribbon; everything else stays quiet.
+   ========================================================================== */
+:root {
+  --accent: #4fe3ff;
+  --accent-2: #ffb547;
+  --font: 'Chakra Petch', ui-sans-serif, system-ui, sans-serif;
+  --display: 'Chakra Petch', ui-sans-serif, system-ui, sans-serif;
+  --wordmark: 'Orbitron', 'Chakra Petch', sans-serif;
+}
+body { font-size: 16px; font-weight: 400; letter-spacing: 0; }
+h1, h2, h3, h4, .page-head h1 { text-transform: none; letter-spacing: 0.01em; }
+h1 { font-size: 1.6rem; font-weight: 600; }
+h2 { font-size: 1.02rem; font-weight: 600; letter-spacing: 0.02em; }
+h3, h4 { font-size: 0.92rem; font-weight: 600; color: var(--text-2); }
+.brand { font-family: var(--wordmark); letter-spacing: 0.32em; }
+.hud-clock { font-family: var(--wordmark); letter-spacing: 0.06em; }
+.nav-link { font-family: var(--font); font-size: 0.95rem; letter-spacing: 0.02em; text-transform: none; font-weight: 500; }
+.btn { font-family: var(--font); font-size: 0.85rem; letter-spacing: 0.02em; text-transform: none; font-weight: 600; }
+.record-label, .auto-send, .msg-section, .viz-head, .hud-chip, .thinking strong, .dest-picker strong {
+  text-transform: none; letter-spacing: 0.02em; font-family: var(--font);
+}
+.record-label { font-size: 0.85rem; font-weight: 600; }
+.msg-section { font-size: 0.88rem; font-weight: 600; }
+.viz-head { font-size: 0.9rem; font-weight: 600; }
+.hud-chip { font-size: 0.75rem; }
+.badge { font-family: var(--font); text-transform: none; letter-spacing: 0.01em; font-size: 0.72rem; font-weight: 600; box-shadow: none; }
+.card::after, .proposal::after, .voice::after { display: none; }          /* single cyan bracket is enough */
+.card-head h2::before, .card > h2::before { content: none; }
+
+/* ---------- voice ribbon (the signature element) ---------- */
+.voice-ribbon {
+  position: sticky; top: var(--topbar-h); z-index: 15;
+  display: grid; grid-template-columns: minmax(160px, 34%) 1fr; align-items: center; gap: 18px;
+  margin: 0 0 14px; padding: 6px 16px;
+  background: linear-gradient(90deg, rgba(4, 14, 26, 0.92), rgba(4, 14, 26, 0.72));
+  border-bottom: 1px solid rgba(79, 227, 255, 0.18);
+  backdrop-filter: blur(10px);
+}
+.voice-ribbon canvas { width: 100%; height: 52px; display: block; }
+.ribbon-caption { margin: 0; font-size: 1.02rem; line-height: 1.35; color: var(--muted); max-width: 70ch;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.voice-ribbon.live .ribbon-caption { color: #eafcff; text-shadow: 0 0 12px rgba(79, 227, 255, 0.35); }
+
+/* ---------- Today hero ---------- */
+.today-hero { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; flex-wrap: wrap; margin-bottom: 14px; }
+.hero-greet { font-size: clamp(1.7rem, 3.2vw, 2.5rem); font-weight: 600; letter-spacing: -0.005em; margin: 0;
+  background: linear-gradient(90deg, #ffffff, #a6f1ff); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.hero-date { margin: 4px 0 0; color: var(--text-2); }
+.hero-next { display: flex; flex-direction: column; gap: 2px; min-width: 220px; padding: 10px 16px;
+  border-left: 3px solid var(--accent-2); background: rgba(255, 181, 71, 0.06); }
+.hero-next strong { font-size: 1.15rem; font-weight: 600; color: #fff; }
+.hero-k { font-size: 0.82rem; color: var(--accent-2); font-weight: 600; }
+
+@media (max-width: 640px) {
+  .voice-ribbon { grid-template-columns: 96px 1fr; gap: 10px; padding: 4px 10px; margin: 0 -10px 10px; }
+  .voice-ribbon canvas { height: 36px; }
+  .ribbon-caption { font-size: 0.9rem; }
+  .today-hero { align-items: stretch; }
+  .hero-next { min-width: 0; width: 100%; }
+  .btn { font-size: 0.78rem; }
+  .topbar .btn, .composer-wrap .btn { font-size: 0.72rem; }
+}
+@media (max-width: 640px) {
+  .sources { flex-wrap: nowrap; overflow-x: auto; gap: 6px; padding-bottom: 2px; }
+  .sources > .source { flex: 0 0 auto; padding: 4px 8px; gap: 6px; }
+  .sources .source-detail { display: none; }
+  .sources .source-name { font-size: 0.8rem; text-transform: capitalize; }
+}

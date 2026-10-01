@@ -24,7 +24,7 @@ export function SourceBadge({ name, info }: { name: string; info: SourceInfo | u
   const s = info ? SOURCE_LABEL[info.status] ?? { tone: 'warn' as Tone, label: info.status } : { tone: 'bad' as Tone, label: 'No status' };
   const detail = [info?.detail, info?.last_sync ? `last sync ${fmtRelative(info.last_sync)}` : null].filter(Boolean).join(' · ');
   return (
-    <div className={`source source-${info?.status ?? 'missing'}`} data-testid={`source-${name}`}>
+    <div className={`source source-${info?.status ?? 'missing'}`} data-testid={`source-${name}`} title={detail || undefined}>
       <span className="source-name">{name}</span>
       <Badge tone={s.tone}>{s.label}</Badge>
       {detail && <span className="source-detail">{detail}</span>}

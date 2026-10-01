@@ -170,15 +170,7 @@ export function TodayPage() {
       <Async state={today}>
         {(t: Today) => (
           <>
-            <header className="page-head">
-              <div>
-                <h1>{fmtDate(t.date)}</h1>
-                <p className="muted">
-                  {t.tz}
-                  {t.tz !== localTz() && <span className="warn-text"> · this device is in {localTz()}</span>} · updated {fmtRelative(t.now)}
-                </p>
-              </div>
-            </header>
+            <TodayHero t={t} />
             <div className="sources" aria-label="Source status">
               {Object.keys(t.sources).length === 0 ? (
                 <span className="warn-text">No source status reported.</span>
@@ -194,7 +186,7 @@ export function TodayPage() {
             <div className="grid-2">
               <Card title={`Agenda (${t.agenda.length})`}>
                 {t.calendar_visual && ['ok', 'partial'].includes(t.calendar_visual.status ?? '') ? (
-                  <CalendarTimeline v={t.calendar_visual} compact />
+                  <CalendarTimeline v={t.calendar_visual} compact bare />
                 ) : t.agenda.length ? (
                   <ul className="list">
                     {t.agenda.map((ev, i) => (
@@ -285,4 +277,58 @@ function TodayWeather() {
   const wx = useAsync(() => api.weather(), []);
   if (!wx.data || wx.data.disabled) return null;
   return <WeatherCard v={wx.data} />;
+}
+
+
+function greeting(d: Date): string {
+  const h = d.getHours();
+  return h < 5 ? 'Working late, AJ' : h < 12 ? 'Good morning, AJ' : h < 17 ? 'Good afternoon, AJ' : 'Good evening, AJ';
+}
+
+/** Greeting + the next real event on the calendar with a live countdown. */
+function TodayHero({ t }: { t: Today }) {
+  const [now, setNow] = useState(() => new Date());
+  useInterval(() => setNow(new Date()), 30000);
+  const evs = (t.calendar_visual?.days?.[0]?.events ?? []).filter((e) => !e.all_day && e.start && e.end);
+  const current = evs.find((e) => new Date(e.start!) <= now && new Date(e.end!) > now);
+  const next = evs.find((e) => new Date(e.start!) > now);
+  const mins = next ? Math.round((new Date(next.start!).getTime() - now.getTime()) / 60000) : null;
+  const inTxt = mins === null ? '' : mins < 60 ? `in ${mins} min` : `in ${Math.floor(mins / 60)} h ${mins % 60} min`;
+  const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const calOk = ['ok', 'partial'].includes(t.calendar_visual?.status ?? '');
+  return (
+    <header className="today-hero">
+      <div>
+        <h1 className="hero-greet">{greeting(now)}.</h1>
+        <p className="hero-date">
+          {fmtDate(t.date)}
+          {t.tz !== localTz() && <span className="warn-text"> (this device is in {localTz()})</span>}
+          <span className="muted"> — updated {fmtRelative(t.now)}</span>
+        </p>
+      </div>
+      <div className="hero-next" aria-live="polite">
+        {!calOk ? (
+          <p className="muted">Connect Google Calendar to see what's next.</p>
+        ) : current ? (
+          <>
+            <span className="hero-k">Happening now</span>
+            <strong>{current.summary}</strong>
+            <span className="muted">until {time(current.end!)}</span>
+          </>
+        ) : next ? (
+          <>
+            <span className="hero-k">Up next {inTxt}</span>
+            <strong>{next.summary}</strong>
+            <span className="muted">{time(next.start!)}</span>
+          </>
+        ) : (
+          <>
+            <span className="hero-k">Rest of today</span>
+            <strong>Clear</strong>
+            <span className="muted">Nothing else on your calendar.</span>
+          </>
+        )}
+      </div>
+    </header>
+  );
 }

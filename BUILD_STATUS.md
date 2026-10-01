@@ -1,5 +1,17 @@
 # BUILD_STATUS
 
+## Session 6 update (2026-09-30): full speech, research headroom, UI refinement
+- **Speech cut off ~80% through:**
+  - Cause: the spoken text was cut at 900 characters and the TTS endpoint capped input at 700.
+  - Fix: caps removed. The client speaks in sentence-sized chunks and fetches the next chunk while the current one plays (pipelined), so it starts sooner and never truncates. Regression test added.
+- **Search limits:** 15 web searches per command by default (adjustable 3–50 in Settings → Budget → JARVIS brain), 12 page fetches, 30 tool calls, 14 steps, 240 s. Searches are still counted in the budget at ~$0.01 each.
+- **UI pass (frontend-design plugin):**
+  - Signature **voice ribbon** on Command: a waveform from Jarvis's actual audio output (Web Audio analyser; procedural on iOS where routing audio through Web Audio is unreliable) with live captions of the sentence being spoken.
+  - Today hero: greeting, plus "Happening now" / "Up next in N min" from the real calendar.
+  - Typography: Chakra Petch in sentence case across the UI. Orbitron is kept only for the wordmark and clock, and mono only for times. All-caps labels are gone. Gold is reserved for attention.
+  - Phone: compact status pills, slim ribbon, and the calendar timeline without nested chrome.
+- **Tests:** backend 241 passed; UI (mocked) 15 passed. Desktop and 390×844 screenshots were reviewed against simulated data.
+
 ## Session 5 update (2026-09-30): conversational voice, visuals, phone polish
 - **Conversational:** the V2 system prompt now makes Jarvis talk *to* AJ: natural first person, times said the way people say them, lists summarized because cards show the detail, and an optional short follow-up question.
 - **Auto-speak on phones:**

@@ -190,7 +190,7 @@ def spoken_summary(kind: str, c: dict) -> str:
     if missing:
         parts.append(f"Heads up: {len(missing)} source{'s' if len(missing) > 1 else ''} unavailable.")
     from jarvis.agents.chief import speechify
-    return speechify(" ".join(parts))[:400]
+    return speechify(" ".join(parts))
 
 
 def generate(conn: sqlite3.Connection, kind: str, force: bool = False, run_id: str | None = None,

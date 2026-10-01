@@ -13,6 +13,8 @@ export interface TtsProvider {
   speak(text: string, opts?: TtsOptions): void;
   stop(): void;
   isSpeaking(): boolean;
+  /** Text currently being spoken (live captions); empty when silent. */
+  readonly caption?: string;
   voices(): { name: string; lang: string; default: boolean; label?: string }[];
   /** Subscribe to speaking-state / voice-list changes. Returns an unsubscribe fn. */
   subscribe(fn: () => void): () => void;
@@ -107,6 +109,43 @@ export function speakable(text: string): string {
     .trim();
 }
 
+/** Split speech into sentence groups (~240 chars) so playback can start quickly and stream the rest. */
+export function splitForSpeech(text: string, max = 240): string[] {
+  const sentences = text.match(/[^.!?]+(?:[.!?]+|$)/g)?.map((x) => x.trim()).filter(Boolean) ?? [text];
+  const out: string[] = [];
+  let cur = '';
+  for (const s of sentences) {
+    if (s.length > max * 1.6) {
+      // very long sentence: break on commas / spaces
+      if (cur) {
+        out.push(cur);
+        cur = '';
+      }
+      let rest = s;
+      while (rest.length > max) {
+        let cut = rest.lastIndexOf(', ', max);
+        if (cut < max / 2) cut = rest.lastIndexOf(' ', max);
+        if (cut < 1) cut = max;
+        out.push(rest.slice(0, cut + 1).trim());
+        rest = rest.slice(cut + 1);
+      }
+      cur = rest.trim();
+    } else if ((cur + ' ' + s).trim().length > max && cur) {
+      out.push(cur);
+      cur = s;
+    } else {
+      cur = (cur + ' ' + s).trim();
+    }
+  }
+  if (cur) out.push(cur);
+  // first chunk short → Jarvis starts talking sooner
+  if (out.length && out[0].length > 140) {
+    const first = out[0].match(/^[^.!?]+[.!?]+/);
+    if (first && first[0].length < out[0].length) out.splice(0, 1, first[0].trim(), out[0].slice(first[0].length).trim());
+  }
+  return out.filter(Boolean);
+}
+
 /** Voice names starting with this prefix are local Piper presets served by the Jarvis backend. */
 export const JARVIS_VOICE_PREFIX = 'jarvis:';
 export const JARVIS_PRESETS = [
@@ -130,14 +169,48 @@ function audioEl(): HTMLAudioElement {
 }
 const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
 let unlocked = false;
+
+/*
+ * Optional audio analysis for the voice ribbon. Routing an <audio> element through Web Audio means it is SILENT
+ * if the context is suspended, so we only wire it once the context is confirmed running, and never on iOS
+ * (where context state is unreliable) — there the ribbon animates procedurally instead.
+ */
+let ctx: AudioContext | null = null;
+let analyser: AnalyserNode | null = null;
+const isIOS = typeof navigator !== 'undefined' && /iPhone|iPad|iPod/.test(navigator.userAgent);
+async function ensureAnalyser(): Promise<void> {
+  if (analyser || isIOS || typeof window === 'undefined' || !('AudioContext' in window)) return;
+  try {
+    ctx = ctx ?? new AudioContext();
+    if (ctx.state !== 'running') await ctx.resume();
+    if (ctx.state !== 'running') return;
+    const src = ctx.createMediaElementSource(audioEl());
+    const an = ctx.createAnalyser();
+    an.fftSize = 512;
+    an.smoothingTimeConstant = 0.6;
+    src.connect(an);
+    an.connect(ctx.destination);
+    analyser = an;
+  } catch {
+    analyser = null;
+  }
+}
+/** Live waveform of Jarvis's voice (null when unavailable — callers animate procedurally). */
+export function voiceWaveform(buf: Uint8Array<ArrayBuffer>): boolean {
+  if (!analyser) return false;
+  analyser.getByteTimeDomainData(buf);
+  return true;
+}
 export function unlockAudio(): void {
   if (unlocked || typeof window === 'undefined') return;
   unlocked = true;
   const a = audioEl();
   a.src = SILENT_WAV;
-  a.play().catch(() => {
-    unlocked = false;
-  });
+  a.play()
+    .then(() => void ensureAnalyser())
+    .catch(() => {
+      unlocked = false;
+    });
   // Note: do NOT prime speechSynthesis here — an utterance in flight would mark Jarvis as "speaking" at mic start,
   // and approvals captured while Jarvis speaks are (correctly) refused.
 }
@@ -155,6 +228,8 @@ class JarvisTts implements TtsProvider {
   private abort: AbortController | null = null;
   private speaking = false;
   private seq = 0;
+  /** The sentence(s) being spoken right now — shown as live captions. */
+  caption = '';
 
   constructor(private fallback: BrowserSpeechTts) {
     fallback.subscribe(() => this.emit());
@@ -186,38 +261,69 @@ class JarvisTts implements TtsProvider {
     }
     const preset = name.slice(JARVIS_VOICE_PREFIX.length);
     const my = ++this.seq;
-    this.abort = new AbortController();
+    const ac = new AbortController();
+    this.abort = ac;
     this.speaking = true;
     this.emit();
-    fetchTtsAudio(text, preset, this.abort.signal, opts.rate ?? 1)
-      .then((blob) => {
-        if (my !== this.seq) return;
+    const chunks = splitForSpeech(text);
+    const rate = opts.rate ?? 1;
+    this.caption = chunks[0] ?? '';
+    this.emit();
+    // Pipeline: fetch chunk i+1 while chunk i plays → starts fast and never truncates long replies.
+    const fetchChunk = (i: number) => fetchTtsAudio(chunks[i], preset, ac.signal, rate);
+    const playBlob = (blob: Blob) =>
+      new Promise<void>((resolve) => {
         const url = URL.createObjectURL(blob);
         const a = audioEl();
         a.src = url;
         a.playbackRate = 1; // speed is synthesized server-side (natural pitch)
         const done = () => {
           URL.revokeObjectURL(url);
-          if (my === this.seq) {
-            this.audio = null;
-            this.speaking = false;
-            this.emit();
-          }
+          resolve();
         };
         a.onended = done;
         a.onerror = done;
         this.audio = a;
-        return a.play().catch(done);
-      })
-      .catch((e: unknown) => {
-        if (my !== this.seq || (e instanceof DOMException && e.name === 'AbortError')) return;
-        this.speaking = false;
-        this.fallback.speak(text, { rate: opts.rate }); // local voice unavailable → browser voice
+        a.play().catch(done);
       });
+    const finish = () => {
+      if (my === this.seq) {
+        this.audio = null;
+        this.speaking = false;
+        this.emit();
+      }
+    };
+    (async () => {
+      let next = fetchChunk(0);
+      for (let i = 0; i < chunks.length; i++) {
+        let blob: Blob;
+        try {
+          blob = await next;
+        } catch (e) {
+          if (my !== this.seq || (e instanceof DOMException && e.name === 'AbortError')) return;
+          // local voice unavailable → browser voice for whatever hasn't been spoken yet
+          this.speaking = false;
+          this.fallback.speak(chunks.slice(i).join(' '), { rate });
+          return;
+        }
+        if (my !== this.seq) return;
+        if (i + 1 < chunks.length) {
+          next = fetchChunk(i + 1);
+          next.catch(() => undefined);
+        }
+        this.caption = chunks[i];
+        this.emit();
+        await playBlob(blob);
+        if (my !== this.seq) return;
+      }
+      this.caption = '';
+      finish();
+    })();
   }
 
   stop(): void {
     this.seq++;
+    this.caption = '';
     this.abort?.abort();
     this.abort = null;
     if (this.audio) {
