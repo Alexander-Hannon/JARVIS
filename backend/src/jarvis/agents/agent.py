@@ -137,7 +137,7 @@ class AgentRun:
 
     def call(self, name: str, args: dict) -> str:
         self.tools_used.append(name)
-        t = T.get(name)
+        t = T.lookup(self.conn, name)
         if t is None or (t.available is not None and not t.available(self.conn)):
             return json.dumps({"error": f"unknown tool {name}"})
         try:

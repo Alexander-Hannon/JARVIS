@@ -52,6 +52,9 @@ def handle_job(conn, job: dict, worker_id: str) -> None:
         elif kind == "todoist_sync":
             from jarvis.integrations import service
             jobs.complete(conn, job["id"], worker_id, service.todoist_sync(conn))
+        elif kind == "mcp_discover":
+            from jarvis.integrations import mcp_hub
+            jobs.complete(conn, job["id"], worker_id, {"status": mcp_hub.discover(conn, payload["server_id"])["status"]})
         elif kind == "vault_index":
             from jarvis.knowledge import vault
             jobs.complete(conn, job["id"], worker_id, vault.index_root(conn, payload["root_id"]))
@@ -94,6 +97,12 @@ def maybe_periodic(conn, last: dict) -> None:
     if now - last.get("ics", 0) > 3600 and A.get_account(conn, "ics"):
         jobs.enqueue(conn, "ics_refresh", {}, dedupe_key=f"ics:{int(time.time() // 3600)}")
         last["ics"] = now
+    if now - last.get("mcp", 0) > 3600:
+        # Re-list reviewed servers hourly so a changed tool list is flagged (and disabled) even between calls.
+        from jarvis.core.db import rows as _rows
+        for s in _rows(conn, "SELECT id FROM mcp_servers WHERE status='active'"):
+            jobs.enqueue(conn, "mcp_discover", {"server_id": s["id"]}, dedupe_key=f"mcpd:{s['id']}:{int(time.time() // 3600)}")
+        last["mcp"] = now
     if now - last.get("vault", 0) > 1800:
         from jarvis.knowledge import vault
         for rid in vault.indexed_roots(conn):

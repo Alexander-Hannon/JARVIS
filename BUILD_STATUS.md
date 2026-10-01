@@ -60,7 +60,18 @@ tiered autonomy). Milestones M0 → M4; this session landed **M0**.
   | SimpleFIN (setup token → access URL) | balances, transactions, unusual charges | — | read-only protocol; credentialed URL never logged/chained |
 - **Tests:** backend 295 passed (+21: 11 connector flows incl. injected-destination refusals and forged-tier block,
   8 respx adapter tests, 2 vault); UI (mocked) 15 passed.
-- **Next:** M2 — MCP client hub.
+- **M2 · MCP client hub** (`integrations/mcp_hub.py`, official `mcp` SDK 2.2; migration `0004_v4_mcp.sql`):
+  - Servers added only in the UI (Settings → Integrations → MCP servers): streamable HTTP (https, or http on loopback)
+    with optional bearer, or a local stdio command (no shell syntax; env stored encrypted).
+  - Every tool is off until AJ reviews it: `read` (only if the server marks it read-only; runs directly, output
+    labeled untrusted) or `propose` (approval card). Proposals use `mcp.call` (T2) or `mcp.call.auto` (T1) — T1 is
+    refused for destructive tools, and the handler re-checks the current review at execution time.
+  - Tool definitions are hash-pinned at review. Hourly re-discovery and every call (list + call in one session) compare
+    the hash; a change disables the server until AJ reviews again (rug-pull defense, tested).
+  - Dynamic tools are built per request as `mcp__<server>__<tool>`, deferred behind tool search.
+  - Not used: the Messages API server-side MCP connector (it would bypass the executor and approvals).
+- **Tests:** backend 302 passed (+7 MCP incl. a real stdio subprocess server); UI (mocked) 15 passed.
+- **Next:** M3 — sandbox (Docker), shell/browser/computer use, skills, Telegram channel, missions.
 
 ## Session 6 update (2026-09-30): full speech, research headroom, UI refinement
 - **Speech cut off ~80% through:**

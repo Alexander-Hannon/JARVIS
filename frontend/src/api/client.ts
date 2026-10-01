@@ -232,6 +232,14 @@ export const api = {
   setConnectorResources: (id: string, sel: { read?: string[]; write?: string[] }) =>
     request<T.ConnectorResources>(`/api/connectors/${encodeURIComponent(id)}/resources`, { json: sel }),
   spotifyStart: () => request<{ auth_url: string }>('/api/connectors/spotify/start', { method: 'POST' }),
+  mcpServers: () => request<T.McpServer[]>('/api/mcp'),
+  addMcpServer: (b: { name: string; transport: 'stdio' | 'http'; command?: string; args?: string[]; url?: string; env?: Record<string, string>; bearer?: string }) =>
+    request<T.McpServer>('/api/mcp', { json: b }),
+  discoverMcp: (id: string) => request<T.McpServer>(`/api/mcp/${encodeURIComponent(id)}/discover`, { method: 'POST' }),
+  reviewMcp: (id: string, modes: Record<string, { mode: T.McpMode; tier: 1 | 2 }>) =>
+    request<T.McpServer>(`/api/mcp/${encodeURIComponent(id)}/review`, { json: { modes } }),
+  enableMcp: (id: string, enabled: boolean) => request<T.McpServer>(`/api/mcp/${encodeURIComponent(id)}/enabled`, { json: { enabled } }),
+  removeMcp: (id: string) => request<unknown>(`/api/mcp/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   vault: () => request<T.VaultStatus>('/api/vault'),
   setVaultIndexed: (rootId: string, enabled: boolean) =>
     request<T.VaultStatus>(`/api/vault/roots/${encodeURIComponent(rootId)}`, { json: { enabled } }),

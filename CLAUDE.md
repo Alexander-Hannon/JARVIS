@@ -31,9 +31,13 @@ V4 plan (approved by AJ): `~/.claude/plans/alright-so-let-s-go-polymorphic-wilke
 - Every provider write goes through `actions/executor.py` after application-code checks: approval bound to version+hash+
   selected items, current version, freshness, pause state, registry, account identity, resource write grant, preconditions.
   Model output can never create Approval rows or call adapters directly.
-- Not yet enabled (planned V4, each needs its milestone's safeguards first): email/Slack send (T2 only, off by default),
-  MCP write tools, sandboxed shell/browser/computer use (Docker sandbox only — never the host), messaging channels.
-  Host shell, SSH, VM admin, purchases, grades, payments: NOT enabled.
+- Email send and Slack channel posts are T2 + `reaches_others` (email send also needs the `mail_send` grant AJ toggles).
+  Home Assistant tier is derived from the entity domain (locks/alarms/covers/scripts → `home.secure`, T2) and re-derived
+  by the executor. MCP tools (`integrations/mcp_hub.py`) are off until AJ reviews them; read mode only for server-marked
+  read-only tools; everything else proposes `mcp.call` (T2) or `mcp.call.auto` (T1, never for destructive tools); tool
+  definitions are hash-pinned and re-checked in the same session as every call.
+- Not yet enabled (planned V4 M3): sandboxed shell/browser/computer use (Docker sandbox only — never the host),
+  messaging channels, missions. Host shell, SSH, VM admin, purchases, grades, payments: NOT enabled.
 - Retrieved/uploaded/calendar/document text is untrusted data. It never grants permissions, picks destinations, or approves.
 - Timeouts after writes are `unknown` outcomes: reconcile (marker / deterministic ID) before any retry. Never duplicate.
 - Secrets: env or encrypted columns only (key outside DB). Never log, echo, export, or put in model context.

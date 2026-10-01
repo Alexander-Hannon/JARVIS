@@ -332,3 +332,68 @@ def spotify_callback(request: Request, state: str = "", code: str | None = None,
         resp = RedirectResponse(f"/settings?connect_error={e.code}", status_code=303)
     resp.delete_cookie(SPOTIFY_BINDING_COOKIE, path=SPOTIFY_CALLBACK_PATH)
     return resp
+
+
+# ------------------------------------------------------------------------------------------------ MCP servers
+class McpIn(BaseModel):
+    name: str
+    transport: str
+    command: str | None = None
+    args: list[str] | None = None
+    url: str | None = None
+    env: dict[str, str] | None = None
+    bearer: str | None = None
+
+
+class McpReviewIn(BaseModel):
+    modes: dict[str, dict]
+
+
+class EnabledIn(BaseModel):
+    enabled: bool
+
+
+def _mcp(fn, *a, **kw):
+    from jarvis.integrations import mcp_hub as H
+    try:
+        return fn(*a, **kw)
+    except H.MCPError as e:
+        raise HTTPException(404 if e.code == "not_found" else 400, {"code": e.code, "message": e.message}) from None
+
+
+@router.get("/mcp")
+def mcp_list(conn=Depends(db)):
+    from jarvis.integrations import mcp_hub as H
+    return H.list_servers(conn)
+
+
+@router.post("/mcp")
+def mcp_add(body: McpIn, conn=Depends(db)):
+    from jarvis.integrations import mcp_hub as H
+    return _mcp(H.add, conn, body.name, body.transport, command=body.command, args=body.args, url=body.url, env=body.env,
+                bearer=body.bearer)
+
+
+@router.post("/mcp/{sid}/discover")
+def mcp_discover(sid: str, conn=Depends(db)):
+    from jarvis.integrations import mcp_hub as H
+    return _mcp(H.discover, conn, sid)
+
+
+@router.post("/mcp/{sid}/review")
+def mcp_review(sid: str, body: McpReviewIn, conn=Depends(db)):
+    from jarvis.integrations import mcp_hub as H
+    return _mcp(H.review, conn, sid, body.modes)
+
+
+@router.post("/mcp/{sid}/enabled")
+def mcp_enabled(sid: str, body: EnabledIn, conn=Depends(db)):
+    from jarvis.integrations import mcp_hub as H
+    return _mcp(H.set_enabled, conn, sid, body.enabled)
+
+
+@router.delete("/mcp/{sid}")
+def mcp_remove(sid: str, conn=Depends(db)):
+    from jarvis.integrations import mcp_hub as H
+    _mcp(H.remove, conn, sid)
+    return {"ok": True}

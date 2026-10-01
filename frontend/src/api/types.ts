@@ -589,3 +589,30 @@ export interface ConnectorResources {
   access: ('read' | 'write')[];
   items: { id: string; name: string; detail?: string; read?: boolean; write?: boolean }[];
 }
+
+// ---------------------------------------------------------------- V4: MCP
+export type McpMode = 'off' | 'read' | 'propose';
+export interface McpTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  annotations: { read_only: boolean; destructive: boolean; idempotent: boolean };
+  mode: McpMode;
+  tier: 1 | 2;
+}
+export interface McpServer {
+  id: string;
+  name: string;
+  transport: 'stdio' | 'http';
+  command: string | null;
+  args: string[];
+  url: string | null;
+  has_secret: boolean;
+  status: 'pending_review' | 'active' | 'changed' | 'error' | 'disabled';
+  simulated: boolean;
+  last_error: string | null;
+  reviewed_at: string | null;
+  pinned_hash: string | null;
+  discovered_hash: string | null;
+  tools: McpTool[];
+}

@@ -63,8 +63,17 @@ def load_all() -> dict[str, Tool]:
     return REGISTRY
 
 
+def dynamic(conn) -> list[Tool]:
+    """Tools that come from AJ's reviewed MCP servers (built per request from the DB, never cached across changes)."""
+    from jarvis.agents.tools.mcp_tools import tools as mcp_tools
+    try:
+        return mcp_tools(conn)
+    except Exception:   # noqa: BLE001 — a broken MCP config must never take the agent down
+        return []
+
+
 def offered(conn) -> list[Tool]:
-    return [t for t in load_all().values() if t.available is None or t.available(conn)]
+    return [t for t in load_all().values() if t.available is None or t.available(conn)] + dynamic(conn)
 
 
 def schemas(conn) -> list[dict]:
@@ -81,6 +90,16 @@ def get(name: str) -> Tool | None:
     return load_all().get(name)
 
 
+def lookup(conn, name: str) -> Tool | None:
+    """Static tool, or a currently-offered MCP tool (re-derived from the DB at call time)."""
+    t = get(name)
+    if t is None and name.startswith("mcp__"):
+        t = next((d for d in dynamic(conn) if d.name == name), None)
+    return t
+
+
 def family(name: str) -> str:
+    if name.startswith("mcp__"):
+        return "mcp"
     t = get(name)
     return t.family if t else "chief"

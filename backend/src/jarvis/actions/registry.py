@@ -121,6 +121,14 @@ for _at in (
     register(_at)
 
 
+# MCP tools AJ reviewed as "propose". Which type a call gets is decided in code from AJ's review (never by the model),
+# and re-checked by the handler at execution time.
+register(ActionType("mcp.call", "mcp", "jarvis.actions.handlers_mcp:h_mcp_call", Tier.T2, "none",
+                    "Run an action tool on one of your MCP servers"))
+register(ActionType("mcp.call.auto", "mcp", "jarvis.actions.handlers_mcp:h_mcp_call", Tier.T1, "none",
+                    "Run an MCP tool you marked as safe to automate"))
+
+
 def get(name: str) -> ActionType | None:
     return REGISTRY.get(name)
 
