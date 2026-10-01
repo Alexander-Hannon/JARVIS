@@ -621,3 +621,29 @@ def skills_remove(name: str, conn=Depends(db)):
     from jarvis.skills import service as SK
     _sk(SK.remove, conn, name)
     return {"ok": True}
+
+
+# ------------------------------------------------------------------------------------------------ Today heads-up, report, manual
+@router.get("/headsup")
+def headsup(conn=Depends(db)):
+    from jarvis import headsup as H
+    return {"cards": H.cards(conn)}
+
+
+@router.get("/report/weekly")
+def weekly(conn=Depends(db)):
+    from jarvis import headsup as H
+    return H.weekly_report(conn)
+
+
+@router.get("/manual")
+def manual(conn=Depends(db)):
+    from jarvis.agents.agent import assistant_name
+    from jarvis.manual import service as MS
+    return {"assistant_name": assistant_name(conn), "guides": MS.guides(), "reference": MS.reference(conn)}
+
+
+@router.get("/manual/search")
+def manual_search(q: str, conn=Depends(db)):
+    from jarvis.manual import service as MS
+    return MS.search(conn, q, 8)

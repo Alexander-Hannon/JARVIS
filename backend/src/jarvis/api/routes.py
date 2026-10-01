@@ -1216,10 +1216,13 @@ def latency(conn=Depends(db)):
 
 
 @router.get("/activity")
-def activity(limit: int = 100, conn=Depends(db)):
-    ev = rows(conn, "SELECT created_at at, kind, message, run_id FROM run_events ORDER BY id DESC LIMIT ?", (min(limit, 500),))
-    au = rows(conn, "SELECT at, kind, summary message, entity_type, entity_id FROM audit_events ORDER BY id DESC LIMIT ?",
-              (min(limit, 500),))
+def activity(limit: int = 100, actor: str | None = None, conn=Depends(db)):
+    # actor filters the audit trail: user (AJ) | policy | mission | channel | system | worker | model
+    ev = [] if actor else rows(conn, "SELECT created_at at, kind, message, run_id FROM run_events ORDER BY id DESC LIMIT ?",
+                               (min(limit, 500),))
+    au = rows(conn, "SELECT at, actor, kind, summary message, entity_type, entity_id FROM audit_events "
+                    + ("WHERE actor=? " if actor else "") + "ORDER BY id DESC LIMIT ?",
+              ((actor, min(limit, 500)) if actor else (min(limit, 500),)))
     return sorted(ev + au, key=lambda e: e["at"], reverse=True)[:limit]
 
 

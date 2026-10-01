@@ -100,7 +100,7 @@ def _norm_event(ev, cal_name: str | None) -> dict:
         sort = iso(parse_iso(start))
     return {"id": ev.id, "calendar": cal_name, "summary": ev.summary, "start": start, "end": end, "all_day": ev.all_day,
             "busy": ev.busy and not ev.all_day, "status": ev.status, "html_link": ev.html_link,
-            "recurring": bool(ev.recurring_event_id), "sort": sort}
+            "recurring": bool(ev.recurring_event_id), "sort": sort, "location": (ev.raw or {}).get("location")}
 
 
 def tasks_snapshot(conn, force: bool = False) -> dict:
