@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -120,11 +121,32 @@ def _verbatim(phrase: str | None, said: str) -> bool:
     return p in re.sub(r"\s+", " ", said.lower())
 
 
+@dataclass(frozen=True)
+class Scope:
+    """Limits for a run that AJ isn't driving live (missions, channel messages). Enforced in code twice: only allowed
+    tools are offered, and AgentRun.call refuses anything outside the scope even if the model names it."""
+    families: frozenset[str] | None = None    # allowed tool families; None = everything
+    allow_propose: bool = True
+    origin: str = "command"                   # proposal origin -> which policy rules may auto-approve
+    scheduled: bool = False                   # counts against the background budget switch
+    max_cost_usd: float | None = None
+    web: bool = True
+    brief: str = ""                           # extra operator instructions appended to the system prompt
+
+    def allows(self, t: T.Tool) -> bool:
+        if t.risk == "propose" and not self.allow_propose:
+            return False
+        return self.families is None or t.family in self.families
+
+
+COMMAND_SCOPE = Scope()
+
+
 class AgentRun:
     """Per-command state shared by tool handlers (see agents/tools/). Handlers only read data or append ActionSpecs."""
 
-    def __init__(self, conn, inp, run_id: str):
-        self.conn, self.inp, self.run_id = conn, inp, run_id
+    def __init__(self, conn, inp, run_id: str, scope: Scope = COMMAND_SCOPE):
+        self.conn, self.inp, self.run_id, self.scope = conn, inp, run_id, scope
         self.captured = parse_iso(inp.captured_at)
         self.tz = inp.tz
         self.specs: list = []
@@ -140,6 +162,8 @@ class AgentRun:
         t = T.lookup(self.conn, name)
         if t is None or (t.available is not None and not t.available(self.conn)):
             return json.dumps({"error": f"unknown tool {name}"})
+        if not self.scope.allows(t):
+            return json.dumps({"error": f"{name} is outside this run's scope"})
         try:
             out = t.handler(self, **(args or {}))
         except TypeError as e:
@@ -167,7 +191,7 @@ def available(conn) -> tuple[bool, str]:
 
 
 def _history(conn, conversation_id: str, current_text: str) -> list[dict]:
-    msgs = rows(conn, "SELECT role, text FROM messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 9",
+    msgs = rows(conn, "SELECT role, text FROM messages WHERE conversation_id=? ORDER BY created_at DESC, rowid DESC LIMIT 9",
                 (conversation_id,))[::-1]
     if msgs and msgs[-1]["role"] == "user" and msgs[-1]["text"] == current_text:
         msgs = msgs[:-1]   # the current message was already stored
@@ -184,12 +208,12 @@ def _history(conn, conversation_id: str, current_text: str) -> list[dict]:
     return out
 
 
-def run(conn, inp, reply, run_id: str, specialists: list[str]) -> None:
+def run(conn, inp, reply, run_id: str, specialists: list[str], scope: Scope = COMMAND_SCOPE) -> None:
     llm = get_provider()
     tz = inp.tz
     now_local = parse_iso(inp.captured_at).astimezone(ZoneInfo(tz))
-    ar = AgentRun(conn, inp, run_id)
-    system = system_prompt(conn, inp, now_local)
+    ar = AgentRun(conn, inp, run_id, scope)
+    system = system_prompt(conn, inp, now_local) + (f"\n\n{scope.brief}" if scope.brief else "")
     user_content: list[dict] = []
     if inp.attachments:
         from jarvis.knowledge import vision
@@ -198,7 +222,7 @@ def run(conn, inp, reply, run_id: str, specialists: list[str]) -> None:
         run_event(conn, run_id, "tool", f"Attached {len(ev['manifest'])} document block(s) (visual content included)")
     user_content.append({"type": "text", "text": inp.text})
     messages = _history(conn, inp.conversation_id, inp.text) + [{"role": "user", "content": user_content}]
-    tools = T.schemas(conn) + server_tools(conn)
+    tools = T.schemas(conn, scope.allows) + (server_tools(conn) if scope.web else [])
     run_event(conn, run_id, "route", "Thinking about what you need")
     t0 = time.monotonic()
     final_text, tool_calls, web_searches = "", 0, 0
@@ -210,8 +234,14 @@ def run(conn, inp, reply, run_id: str, specialists: list[str]) -> None:
         if row(conn, "SELECT cancel_requested FROM runs WHERE id=?", (run_id,))["cancel_requested"]:
             reply.say("Stopped, as requested.")
             break
+        if scope.max_cost_usd is not None:
+            from jarvis.llm.budget import run_cost
+            if run_cost(conn, run_id) >= scope.max_cost_usd:
+                reply.say("I stopped here: this run reached its budget.")
+                run_event(conn, run_id, "status", f"Stopped at the ${scope.max_cost_usd:.2f} run budget")
+                break
         resp = llm.agent_step(conn, system=system, messages=messages, tools=tools, max_tokens=6000, run_id=run_id,
-                              max_web_searches=search_limit(conn))
+                              max_web_searches=search_limit(conn), scheduled=scope.scheduled)
         content = resp["content"]
         for b in content:
             if _bt(b, "type") == "server_tool_use":
@@ -264,7 +294,7 @@ def run(conn, inp, reply, run_id: str, specialists: list[str]) -> None:
         n = len(ar.specs)
         summary = "; ".join(s.expected_effect for s in ar.specs)
         _new_proposal(conn, inp, reply, run_id, f"{n} item{'s' if n != 1 else ''} ready for your approval", ar.specs, summary,
-                      ar.assumptions, [])
+                      ar.assumptions, [], origin=scope.origin)
         if blocked and not any("not connected" in x.lower() for x in blocked):
             reply.say("(Pick the Todoist project on the card below to unlock approval.)")
     reply.spoken = final_text or None   # chief runs speechify() on it

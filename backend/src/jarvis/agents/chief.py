@@ -427,7 +427,8 @@ def _dispatch(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id:
     return _question(conn, inp, reply, run_id)
 
 
-def _new_proposal(conn, inp: CommandInput, reply: Reply, run_id: str, title: str, specs, summary: str, assumptions, questions):
+def _new_proposal(conn, inp: CommandInput, reply: Reply, run_id: str, title: str, specs, summary: str, assumptions, questions,
+                  origin: str = "command"):
     if reply.defer:
         reply.deferred.append((title, specs, summary, assumptions, questions))
         return None
@@ -436,8 +437,8 @@ def _new_proposal(conn, inp: CommandInput, reply: Reply, run_id: str, title: str
         conn.execute("UPDATE proposals SET status='superseded', updated_at=? WHERE id=?", (now_iso(), old["id"]))
         run_event(conn, run_id, "status", "Previous unapproved plan superseded by this one")
     pid = P.create(conn, title, specs, summary, conversation_id=inp.conversation_id, run_id=run_id, capture_id=inp.capture_id,
-                   assumptions=assumptions, questions=questions, source={"capture_id": inp.capture_id, "text": inp.text,
-                                                                           "captured_at": inp.captured_at, "tz": inp.tz})
+                   assumptions=assumptions, questions=questions, origin=origin,
+                   source={"capture_id": inp.capture_id, "text": inp.text, "captured_at": inp.captured_at, "tz": inp.tz})
     reply.proposal_id = pid
     from jarvis.actions import policy
     auto = policy.try_auto_approve(conn, pid)

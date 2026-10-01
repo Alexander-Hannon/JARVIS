@@ -52,6 +52,9 @@ def handle_job(conn, job: dict, worker_id: str) -> None:
         elif kind == "todoist_sync":
             from jarvis.integrations import service
             jobs.complete(conn, job["id"], worker_id, service.todoist_sync(conn))
+        elif kind == "run_mission":
+            from jarvis.missions import service as missions
+            jobs.complete(conn, job["id"], worker_id, {"status": missions.run_now(conn, payload["mission_id"])["last_status"]})
         elif kind == "mcp_discover":
             from jarvis.integrations import mcp_hub
             jobs.complete(conn, job["id"], worker_id, {"status": mcp_hub.discover(conn, payload["server_id"])["status"]})
@@ -79,6 +82,8 @@ def heartbeat(conn, worker_id: str, started: str) -> None:
 def run_once(conn, worker_id: str, max_jobs: int = 20) -> int:
     n = 0
     scheduler.tick(conn)
+    from jarvis.missions import service as missions
+    missions.tick(conn)
     with tx(conn):
         P.expire_stale(conn)
     while n < max_jobs:

@@ -136,7 +136,7 @@ class AnthropicProvider(LLMProvider):
 
 
 def _agent_step_anthropic(self, conn, *, system, messages, tools, max_tokens=4000, effort=None, run_id=None,
-                          max_web_searches=0) -> dict:
+                          max_web_searches=0, scheduled=False) -> dict:
     """One model step of the agent loop. Returns {"content": [blocks], "stop_reason", "usage", "model"}.
     Content blocks are returned as the SDK objects so thinking/server-tool blocks round-trip unchanged."""
     import anthropic
@@ -149,7 +149,7 @@ def _agent_step_anthropic(self, conn, *, system, messages, tools, max_tokens=400
     max_tokens = min(max_tokens, max(2000, int(b.get("max_output_tokens") or 4000)))
     est_in = sum(len(str(m.get("content"))) for m in messages) // 3 + len(system) // 3 + 2500
     try:
-        res_id = budget.reserve(conn, "agent", model, est_in, max_tokens, False, run_id, max_web_searches=max_web_searches)
+        res_id = budget.reserve(conn, "agent", model, est_in, max_tokens, scheduled, run_id, max_web_searches=max_web_searches)
     except budget.BudgetBlocked as e:
         raise LLMError("budget", e.message) from e
     client = anthropic.Anthropic(api_key=key, max_retries=1, timeout=120.0)
@@ -196,7 +196,8 @@ class ScriptedLLM(LLMProvider):
     def available(self, conn) -> tuple[bool, str]:
         return True, "contract mock"
 
-    def agent_step(self, conn, *, system, messages, tools, max_tokens=4000, effort=None, run_id=None, max_web_searches=0):
+    def agent_step(self, conn, *, system, messages, tools, max_tokens=4000, effort=None, run_id=None, max_web_searches=0,
+                   scheduled=False):
         """Scripted agent steps: each queued response is {"content": [block dicts], "stop_reason": ...} or a callable(req)."""
         import copy
         req = {"system": system, "messages": copy.deepcopy(messages), "tools": tools,

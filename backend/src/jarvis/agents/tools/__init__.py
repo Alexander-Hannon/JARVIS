@@ -76,10 +76,10 @@ def offered(conn) -> list[Tool]:
     return [t for t in load_all().values() if t.available is None or t.available(conn)] + dynamic(conn)
 
 
-def schemas(conn) -> list[dict]:
+def schemas(conn, allow: Callable[[Tool], bool] | None = None) -> list[dict]:
     """Client tool definitions for one request. Deferred tools are only reachable through tool search, which keeps the
     prompt small (and cacheable) as integrations and MCP servers add dozens of tools."""
-    tools = offered(conn)
+    tools = [t for t in offered(conn) if allow is None or allow(t)]
     out = [t.schema() for t in tools]
     if any(t.deferred for t in tools):
         out.insert(0, dict(TOOL_SEARCH))

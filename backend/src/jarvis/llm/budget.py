@@ -135,3 +135,12 @@ def summary(conn) -> dict:
 
 def _now_local(tz: str) -> datetime:
     return utcnow().astimezone(ZoneInfo(tz))
+
+
+def run_cost(conn, run_id: str) -> float:
+    """Measured (or reserved, while in flight) spend attributed to one run — used for per-mission caps."""
+    r = conn.execute("SELECT COALESCE(SUM(u.cost_usd),0) FROM usage_records u JOIN usage_reservations r ON r.id=u.reservation_id "
+                     "WHERE r.run_id=?", (run_id,)).fetchone()[0]
+    pending = conn.execute("SELECT COALESCE(SUM(est_cost_usd),0) FROM usage_reservations WHERE run_id=? AND status='reserved'",
+                           (run_id,)).fetchone()[0]
+    return float(r) + float(pending)

@@ -397,3 +397,55 @@ def mcp_remove(sid: str, conn=Depends(db)):
     from jarvis.integrations import mcp_hub as H
     _mcp(H.remove, conn, sid)
     return {"ok": True}
+
+
+# ------------------------------------------------------------------------------------------------ missions
+def _msn(fn, *a):
+    from jarvis.missions import service as M
+    try:
+        return fn(*a)
+    except M.MissionError as e:
+        raise HTTPException(404 if e.code == "not_found" else 400, {"code": e.code, "message": e.message}) from None
+
+
+@router.get("/missions")
+def missions_list(conn=Depends(db)):
+    from jarvis.missions import service as M
+    return {"missions": M.list_missions(conn), "templates": M.TEMPLATES, "families": M.ALL_FAMILIES,
+            "read_only_families": M.READ_ONLY_FAMILIES}
+
+
+@router.post("/missions")
+def missions_create(body: dict, conn=Depends(db)):
+    from jarvis.agents import context as ctx
+    from jarvis.missions import service as M
+    return _msn(M.create, conn, body, ctx.user_tz(conn))
+
+
+@router.patch("/missions/{mid}")
+def missions_update(mid: str, body: dict, conn=Depends(db)):
+    from jarvis.missions import service as M
+    return _msn(M.update, conn, mid, body)
+
+
+@router.post("/missions/{mid}/enabled")
+def missions_enabled(mid: str, body: EnabledIn, conn=Depends(db)):
+    from jarvis.missions import service as M
+    return _msn(M.set_enabled, conn, mid, body.enabled)
+
+
+@router.post("/missions/{mid}/run")
+def missions_run(mid: str, conn=Depends(db)):
+    from jarvis.core import jobs
+    from jarvis.missions import service as M
+    _msn(M.get, conn, mid)
+    jobs.enqueue(conn, "run_mission", {"mission_id": mid, "manual": True}, dedupe_key=f"mission:{mid}:manual:{time.time_ns()}",
+                 max_attempts=1)
+    return {"queued": True}
+
+
+@router.delete("/missions/{mid}")
+def missions_delete(mid: str, conn=Depends(db)):
+    from jarvis.missions import service as M
+    _msn(M.delete, conn, mid)
+    return {"ok": True}
