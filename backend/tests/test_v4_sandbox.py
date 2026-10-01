@@ -156,3 +156,13 @@ def test_egress_proxy_allowlist(tmp_path, monkeypatch):
     assert not m.allowed("pypi.org.evil.com")
     (tmp_path / "allow.json").write_text(json.dumps({"domains": ["pypi.org"], "until": time.time() - 1}))
     assert not m.allowed("pypi.org")                                    # expired window = closed
+
+
+def test_large_files_are_never_silently_truncated(client, conn, rt):
+    """Regression (found live): exec output is clipped for the model, so file reads use a binary path instead."""
+    from jarvis.sandbox import service as S
+    rt.files["/workspace/big.csv"] = ("x," * 20000).encode()
+    assert len(S.read_file(conn, None, "big.csv", 100000)) == 40000
+    with pytest.raises(S.SandboxError) as e:
+        S.read_file(conn, None, "big.csv", 1000)
+    assert e.value.code == "too_big"

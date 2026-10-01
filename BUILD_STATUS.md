@@ -77,9 +77,16 @@ tiered autonomy). Milestones M0 → M4; this session landed **M0**.
   hash, local STT for voice notes, forwards saved as untrusted notes, notification mirroring.
 - **M3 · Sandbox:** Docker image + egress allowlist proxy (`backend/sandbox/`), hardened `docker run`, tools for
   shell/files/browser, network windows (`sandbox.network`, T2), export via `file.write`, computer toolset on the
-  sandbox display. **Not live-verified:** Docker isn't reachable from this WSL distro (Docker Desktop's WSL integration
-  is off), so the image has not been built or run here; everything is tested against a labeled FakeRuntime, and the
-  proxy's allowlist logic is tested directly.
+  sandbox display.
+  **Live-verified 2026-10-01** (Docker Desktop 29.1.3 via WSL integration; image `jarvis-sandbox:1` built):
+  runs as uid 1000 with all capability sets zero; root filesystem read-only; no docker socket or host mounts;
+  internet closed by default (proxy 403, direct connections refused); approved window to pypi.org → 200 while
+  example.com and the lookalike pypi.org.evil.com stay 403; closing the window cuts access immediately; headless
+  browse of example.com returned title/text/screenshot; on the Xvfb desktop a headful Chromium was screenshotted and
+  driven with mouse_move, cursor_position, left_click, type, key, scroll and zoom.
+  **Bug found live and fixed:** exec output is clipped at 20k chars for the model, which cut base64 screenshots and
+  would have silently truncated larger exported files. Screenshots, zoom and file reads now use a binary
+  `read_bytes` path; oversize reads fail loudly (regression test added).
 - **M3 · Skills:** SKILL.md folders installed by AJ, deferred `skill__` tools, helper files copied into the sandbox,
   drafts need approval (`skill.install`, T2).
 - **M4 · Every page:** new nav (Today, Command, Inbox, Actions, Missions, Workbench, Memory, Projects, Connections,
@@ -246,8 +253,6 @@ Measured on this host:
 - **Deliberately not used:** vector DB, Redis, LangGraph, n8n, containers (see ARCHITECTURE.md).
 
 ## Blockers (need AJ)
-0. V4 sandbox: Docker Desktop → Settings → Resources → WSL integration → enable for this Ubuntu distro, restart
-   JARVIS, then Workbench → Build sandbox. Then run the live sandbox checks (network window, browser, desktop).
 0. V4 apps (each optional): Notion integration secret, Slack user token, Canvas token, Spotify app client ID
    (`JARVIS_SPOTIFY_CLIENT_ID`), Home Assistant long-lived token, OpenRouteService key, SimpleFIN setup token —
    Settings → Integrations → Apps shows the exact steps for each.

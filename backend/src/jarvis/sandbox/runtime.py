@@ -49,6 +49,7 @@ class Runtime(Protocol):
     def stop(self) -> None: ...
     def reset(self) -> None: ...
     def exec(self, command: str, timeout_s: int, stdin: bytes | None = None) -> ExecResult: ...
+    def read_bytes(self, path: str, max_bytes: int) -> bytes | None: ...   # raw file bytes (no output clipping)
     def set_egress(self, domains: list[str], until_unix: float) -> None: ...
     def screenshot(self) -> bytes: ...
     def input(self, args: list[str]) -> ExecResult: ...       # xdotool argument list
@@ -151,6 +152,15 @@ class DockerRuntime:
         return ExecResult(p.returncode, _clip(p.stdout), _clip(p.stderr), int((time.perf_counter() - t) * 1000),
                           p.returncode == 124)
 
+    def read_bytes(self, path: str, max_bytes: int) -> bytes | None:
+        # Binary-safe and unclipped (exec output is clipped for the model); the caller validated `path`.
+        p = self._docker("exec", CONTAINER, "head", "-c", str(max_bytes + 1), "--", path, timeout=60, check=False)
+        if p.returncode != 0:
+            return None
+        if len(p.stdout) > max_bytes:
+            raise SandboxUnavailable(f"File is larger than {max_bytes} bytes.")
+        return p.stdout
+
     def set_egress(self, domains: list[str], until_unix: float) -> None:
         body = json.dumps({"domains": sorted({d.lower() for d in domains}), "until": until_unix}).encode()
         self._docker("exec", "-i", PROXY, "sh", "-c", "cat > /run/allow/allow.json", stdin=body, timeout=15)
@@ -209,6 +219,12 @@ class FakeRuntime:
             if k in command:
                 return v
         return ExecResult(0, f"ran: {command}", "", 3)
+
+    def read_bytes(self, path: str, max_bytes: int) -> bytes | None:
+        data = self.files.get(path)
+        if data is not None and len(data) > max_bytes:
+            raise SandboxUnavailable(f"File is larger than {max_bytes} bytes.")
+        return data
 
     def set_egress(self, domains: list[str], until_unix: float) -> None:
         self.egress = (sorted(domains), until_unix)
