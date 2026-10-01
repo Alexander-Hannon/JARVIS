@@ -85,6 +85,16 @@ for _at in (
 ):
     register(_at)
 
+_MAIL = "jarvis.actions.handlers_mail"
+for _box, _acct, _name in (("gmail", "google", "Gmail"), ("outlook", "microsoft", "Outlook")):
+    register(ActionType(f"{_box}.draft.create", _box, f"{_MAIL}:h_draft_create", Tier.T1, "marker",
+                        f"Save a {_name} draft (not sent)", _acct, undo=f"{_box}.draft.delete"))
+    register(ActionType(f"{_box}.draft.delete", _box, f"{_MAIL}:h_draft_delete", Tier.T2, "native",
+                        f"Delete a {_name} draft", _acct))
+    # Sending reaches other people: hard T2, needs the mail_send grant AJ creates by enabling sending, never retried.
+    register(ActionType(f"{_box}.send", _box, f"{_MAIL}:h_send", Tier.T2, "none", f"Send an email from {_name}", _acct,
+                        "mail_send", grant_always=True, reaches_others=True))
+
 
 def get(name: str) -> ActionType | None:
     return REGISTRY.get(name)

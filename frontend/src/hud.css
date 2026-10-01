@@ -621,3 +621,28 @@ h3, h4 { font-size: 0.92rem; font-weight: 600; color: var(--text-2); }
   .sources .source-detail { display: none; }
   .sources .source-name { font-size: 0.8rem; text-transform: capitalize; }
 }
+
+/* ---------------------------------------------------------------- V4: inbox card + mail */
+.viz-inbox ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.viz-inbox li {
+  display: grid; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr) auto auto; align-items: center; gap: 8px;
+  padding: 6px 8px; border: 1px solid rgba(0, 216, 255, 0.12); background: rgba(0, 12, 26, 0.4);
+}
+.viz-inbox li.unread .who, .viz-inbox li.unread .subj { color: var(--text); font-weight: 600; }
+.viz-inbox .who, .viz-inbox .subj { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.viz-inbox .when { font-size: 0.75rem; color: var(--muted); }
+.tag { font-size: 0.72rem; padding: 1px 6px; border: 1px solid rgba(0, 216, 255, 0.25); color: var(--muted); white-space: nowrap; }
+.tag-needs_reply { border-color: var(--accent-2); color: var(--accent-2); }
+.tag-waiting { border-color: rgba(0, 216, 255, 0.5); color: var(--accent); }
+@media (max-width: 640px) {
+  .viz-inbox li { grid-template-columns: minmax(0, 1fr) auto; }
+  .viz-inbox .who { grid-column: 1 / -1; font-size: 0.8rem; }
+  .viz-inbox .when { display: none; }
+}
+.email-preview { border: 1px solid rgba(0, 216, 255, 0.18); background: rgba(0, 12, 26, 0.45); padding: 10px 12px; margin: 6px 0; }
+.email-preview.email-send { border-color: var(--accent-2); }
+.email-head { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 4px 0 8px; font-size: 0.9rem; }
+.email-head dt { color: var(--muted); }
+.email-head dd { margin: 0; overflow-wrap: anywhere; }
+.email-body { white-space: pre-wrap; font-family: var(--font); font-size: 0.92rem; margin: 0; max-height: 18rem; overflow: auto; }
+.mailbox-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-bottom: 1px solid rgba(0, 216, 255, 0.08); }

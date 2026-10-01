@@ -393,7 +393,9 @@ EDITABLE_ARGS = {"task.create": {"content", "description", "due_date", "due_date
                                  "duration", "duration_unit"},
                  "event.create": {"summary", "description", "start", "end"},
                  "task.update": {"content", "description", "due_date", "due_datetime", "priority"},
-                 "file.write": {"path", "content"}}
+                 "file.write": {"path", "content"},
+                 # recipients are destinations: never editable here (re-propose instead)
+                 "gmail.draft.create": {"subject", "body"}, "outlook.draft.create": {"subject", "body"}}
 
 
 @router.post("/proposals/{pid}/revise")
@@ -427,6 +429,10 @@ def revise(pid: str, body: ReviseIn, conn=Depends(db)):
                 sp.expected_effect = f"Create Todoist task “{sp.args.get('content')}”" + (
                     f" due {sp.args.get('due_datetime') or sp.args.get('due_date')}" if sp.args.get("due_datetime") or
                     sp.args.get("due_date") else "") + (f" in {sp.target_name}" if sp.target_name else "")
+            if sp.action_type.endswith(".draft.create"):
+                sp.after = (sp.after or {}) | {k: sp.args[k] for k in ("subject", "body")}
+                label = "Gmail" if sp.action_type.startswith("gmail") else "Outlook"
+                sp.expected_effect = f"Save a {label} draft to {', '.join(sp.args['to'])}: “{sp.args['subject']}” (not sent)"
             if sp.action_type == "event.create":
                 sp.expected_effect = f"Add “{sp.args.get('summary')}” {sp.args['start'].get('dateTime')} to {sp.target_name}"
                 sp.preconditions["slot_free_at"] = None   # edited time: freshness re-checked at execution

@@ -27,8 +27,27 @@ tiered autonomy). Milestones M0 → M4; this session landed **M0**.
   (not installed) into the session scratchpad via `LD_LIBRARY_PATH`. On your machine: `sudo npx playwright install-deps chromium`.
 - **Still AJ's decision:** opting into server-side refusal `fallbacks` (fallback-model pricing may sit outside the local
   ledger) — left off.
-- **Next (M1):** Gmail + Outlook (read/triage, drafts), Obsidian vault indexing, then Notion, Slack, Canvas, Spotify,
-  Home Assistant, travel time, SimpleFIN — each with a contract fake, connect flow, grants and registered action types.
+- **M1 · Email (Gmail + Outlook):**
+  - Adapters: `integrations/gmail.py` (REST over GoogleCredentials; `gmail.readonly` + `gmail.compose`, new Google
+    purpose `gmail`) and `integrations/microsoft.py` (Microsoft identity auth-code + PKCE, tenant `common` so
+    outlook.com works; Graph mail with `Mail.ReadWrite`; `Mail.Send` only when AJ reconnects with sending allowed).
+  - Drafts are reconciled by a hidden marker (Gmail `X-Jarvis-Op` MIME header, Outlook single-value extended
+    property), never by text in the visible body. Lost responses reconcile without duplicate drafts.
+  - Action types per mailbox: `<box>.draft.create` (T1, undo = delete draft), `<box>.draft.delete` (T2),
+    `<box>.send` (T2, `reaches_others`, idempotency `none`, needs a `mail_send` write grant that only exists while AJ
+    has sending enabled; an unclear send is never re-sent: draft gone → treated as sent, draft present → AJ decides).
+  - Agent tools (deferred behind tool search): `check_inbox` (deterministic triage: needs_reply/waiting/fyi/bulk),
+    `search_email`, `read_email`, `propose_email_draft`, `propose_send_draft`. Rail in code: draft recipients must be
+    in AJ's own words or on the thread he asked to reply to (blocks injected "send to attacker" addresses).
+  - API: `/api/inbox`, `/api/inbox/thread`, Microsoft setup/start/callback, `/api/integrations/mail/sending`.
+  - UI: Email card in Settings → Integrations (connect Gmail/Outlook, sending toggle with confirmation), inbox visual
+    card in replies, letter-style email preview on approval cards (send items flagged "can't be unsent"; recipients
+    not editable).
+  - Not live-verified: needs AJ's Gmail API enablement / Azure app registration (see Blockers).
+- **Tests:** backend 274 passed (+21: 12 mail flows incl. reconcile/no-resend/grant revocation/undo, 9 respx adapter
+  tests); UI (mocked) 15 passed.
+- **Next (M1 cont.):** Obsidian vault indexing, then Notion, Slack, Canvas, Spotify, Home Assistant, travel time,
+  SimpleFIN — each with a contract fake, connect flow, grants and registered action types.
 
 ## Session 6 update (2026-09-30): full speech, research headroom, UI refinement
 - **Speech cut off ~80% through:**
@@ -180,6 +199,9 @@ Measured on this host:
 - **Deliberately not used:** vector DB, Redis, LangGraph, n8n, containers (see ARCHITECTURE.md).
 
 ## Blockers (need AJ)
+0. V4 email: enable the Gmail API on the existing Google Cloud project (and add the two Gmail scopes to the consent
+   screen); for Outlook, an Azure app registration (Settings → Integrations → Email shows the exact steps and redirect
+   URI) with `JARVIS_MICROSOFT_CLIENT_ID/SECRET` in `.env`.
 1. Todoist API token, plus a dedicated "Jarvis Test" project for live verification.
 2. A Google Cloud OAuth Web client (ID and secret in `.env`) and consent; a "Jarvis Test" calendar.
 3. Private ICS deadline-feed URL; confirm course mappings (own vs GTA).

@@ -449,7 +449,7 @@ export interface GoogleSetup {
   configured: boolean;
   redirect_uri: string;
   required_apis: string[];
-  scopes: { calendar: string[]; drive: string[] };
+  scopes: { calendar: string[]; drive: string[]; gmail?: string[] };
 }
 export interface GoogleCalendar {
   id: string;
@@ -521,4 +521,42 @@ export interface CourseMapping {
   course?: string;
   project_id?: string;
   [k: string]: unknown;
+}
+
+// ---------------------------------------------------------------- V4: email
+export type Mailbox = 'gmail' | 'outlook';
+export type MailCategory = 'needs_reply' | 'waiting' | 'fyi' | 'bulk';
+export interface MailItem {
+  ref: string;
+  mailbox: Mailbox;
+  category: MailCategory;
+  from_name: string;
+  sender_email: string;
+  subject: string;
+  snippet: string;
+  date: ISODate | null;
+  unread: boolean;
+  important?: boolean;
+  web_url: string | null;
+}
+export interface InboxResponse {
+  items: MailItem[];
+  counts: Record<MailCategory, number>;
+  sources: Record<string, { status: string; count?: number; simulated?: boolean; detail?: string }>;
+  mailboxes: Record<Mailbox, { status: string; address: string | null }>;
+}
+export interface MailThread {
+  mailbox: Mailbox;
+  thread_ref: string;
+  subject: string;
+  messages: { ref: string; from: string; to: string[]; cc: string[]; date: ISODate | null; text: string }[];
+  note: string;
+}
+export interface MicrosoftSetup {
+  configured: boolean;
+  redirect_uri: string;
+  tenant: string;
+  scopes: string[];
+  send_scope_added_when_enabled: string;
+  steps: string[];
 }

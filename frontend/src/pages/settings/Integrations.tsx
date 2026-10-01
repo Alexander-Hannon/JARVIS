@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, errorMessage } from '../../api/client';
-import type { GoogleCalendar, Integration } from '../../api/types';
+import type { GoogleCalendar, Integration, Mailbox } from '../../api/types';
 import { Async, Badge, Card, Empty, ErrorBox, KV, ReasonButton, SecretForm, StateBadge } from '../../components/ui';
 import { fmtDateTime, fmtRelative, humanValue, textOf } from '../../lib/format';
 import { useAsync } from '../../lib/hooks';
@@ -357,6 +357,135 @@ function GoogleSection({ integrations }: { integrations: Integration[] }) {
   );
 }
 
+function MailboxRow({
+  label,
+  mailbox,
+  integration,
+  connected,
+  address,
+  onChanged,
+}: {
+  label: string;
+  mailbox: Mailbox;
+  integration: Integration | undefined;
+  connected: boolean;
+  address: string | null;
+  onChanged: () => void;
+}) {
+  const [err, setErr] = useState<unknown>(null);
+  const sending = !!integration?.grants.some((g) => g.resource_type === 'mail_send' && g.access === 'write');
+  const toggle = async () => {
+    setErr(null);
+    if (!sending && !window.confirm(`Allow JARVIS to send from ${label}? Every send still needs your explicit approval, and rules can never send automatically.`)) return;
+    try {
+      await api.setMailSending(mailbox, !sending);
+      onChanged();
+    } catch (e) {
+      setErr(e);
+    }
+  };
+  return (
+    <li className="mailbox-row">
+      <div>
+        <strong>{label}</strong>{' '}
+        <Badge tone={connected ? 'ok' : 'neutral'}>{connected ? 'connected' : 'not connected'}</Badge>
+        {address && <span className="muted small"> {address}</span>}
+      </div>
+      {connected && (
+        <div className="row gap wrap small">
+          <span className="muted">Reads and drafts: on.</span>
+          <span>Sending: {sending ? <strong>on (approval per message)</strong> : 'off'}</span>
+          <button type="button" className="btn btn-small" onClick={() => void toggle()}>
+            {sending ? 'Turn sending off' : 'Allow sending…'}
+          </button>
+        </div>
+      )}
+      <ErrorBox error={err} />
+    </li>
+  );
+}
+
+function EmailSection({ integrations, onChanged }: { integrations: Integration[]; onChanged: () => void }) {
+  const google = useAsync(() => api.googleSetup(), []);
+  const ms = useAsync(() => api.microsoftSetup(), []);
+  const inbox = useAsync(() => api.inbox({ limit: 1 }), []);
+  const [err, setErr] = useState<unknown>(null);
+  const go = async (fn: () => Promise<{ auth_url: string }>) => {
+    setErr(null);
+    try {
+      window.location.assign((await fn()).auth_url);
+    } catch (e) {
+      setErr(e);
+    }
+  };
+  const boxes = inbox.data?.mailboxes;
+  return (
+    <Card title="Email (Gmail & Outlook)" id="connect-email">
+      <p className="muted small">
+        JARVIS can triage your inbox, read threads you point it at, and save drafts in your own mailbox. Email text is
+        treated as untrusted. Recipients must come from your own words or the thread you asked to reply to.
+      </p>
+      <ul className="stack plain">
+        <MailboxRow
+          label="Gmail"
+          mailbox="gmail"
+          integration={integrations.find((i) => i.provider === 'google')}
+          connected={boxes?.gmail?.status === 'connected'}
+          address={boxes?.gmail?.address ?? null}
+          onChanged={() => {
+            onChanged();
+            void inbox.reload();
+          }}
+        />
+        <MailboxRow
+          label="Outlook"
+          mailbox="outlook"
+          integration={integrations.find((i) => i.provider === 'microsoft')}
+          connected={boxes?.outlook?.status === 'connected'}
+          address={boxes?.outlook?.address ?? null}
+          onChanged={() => {
+            onChanged();
+            void inbox.reload();
+          }}
+        />
+      </ul>
+      <div className="row gap wrap">
+        <ReasonButton
+          className="btn btn-primary"
+          reason={google.data?.configured ? null : 'Configure the Google OAuth client first (see Google section)'}
+          onClick={() => void go(() => api.googleStart('gmail'))}
+        >
+          Connect Gmail
+        </ReasonButton>
+        <ReasonButton
+          className="btn"
+          reason={ms.data?.configured ? null : 'Configure the Microsoft app registration first (steps below)'}
+          onClick={() => void go(() => api.microsoftStart(false))}
+        >
+          Connect Outlook
+        </ReasonButton>
+        {boxes?.outlook?.status === 'connected' && (
+          <ReasonButton className="btn" reason={ms.data?.configured ? null : 'Not configured'} onClick={() => void go(() => api.microsoftStart(true))}>
+            Reconnect Outlook with sending allowed
+          </ReasonButton>
+        )}
+      </div>
+      {ms.data && !ms.data.configured && Array.isArray(ms.data.steps) && (
+        <details className="small">
+          <summary>Set up Outlook (Microsoft app registration)</summary>
+          <ol>
+            {ms.data.steps.map((s, i) => (
+              <li key={i}>{s}</li>
+            ))}
+          </ol>
+        </details>
+      )}
+      {google.data?.scopes?.gmail && <p className="muted small">Gmail scopes: {google.data.scopes.gmail.join(', ')}</p>}
+      <ErrorBox error={err} />
+    </Card>
+  );
+}
+
 function IcsSection({ integration, onChanged }: { integration: Integration | undefined; onChanged: () => void }) {
   const deadlines = useAsync(() => api.deadlines(), []);
   const mappings = useAsync(() => api.courseMappings(), []);
@@ -526,6 +655,7 @@ export function IntegrationsSection() {
       </Card>
       <TodoistSection integration={find('todoist')} onChanged={reload} />
       <GoogleSection integrations={list} />
+      <EmailSection integrations={list} onChanged={reload} />
       <IcsSection integration={find('ics')} onChanged={reload} />
       <GithubSection onChanged={reload} />
       <Card title="Anthropic (reasoning model)" id="connect-anthropic">

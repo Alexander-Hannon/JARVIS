@@ -120,8 +120,8 @@ def test_model_has_no_tool_that_approves_or_writes_policy():
 
 def test_deferred_tools_bring_tool_search(conn):
     from jarvis.agents import tools as T
-    names = [s.get("name") for s in T.schemas(conn)]
-    assert "tool_search_tool_bm25" not in names
+    core = [t.name for t in T.load_all().values() if not t.deferred]
+    assert "get_calendar" in core and "propose_tasks" in core         # everyday tools stay loaded up front
     T.REGISTRY["zz_deferred_probe"] = T.Tool("zz_deferred_probe", "probe", T.obj({}), lambda run: {}, "read", "chief",
                                              deferred=True)
     try:

@@ -170,6 +170,8 @@ def _inverse(a: dict, inverse_type: str) -> P.ActionSpec:
     ext = a["external_id"]
     args = {"task.delete": {"task_id": ext}, "task.reopen": {"task_id": ext}, "task.complete": {"task_id": ext},
             "event.delete": {"event_id": ext}}.get(inverse_type)
+    if inverse_type.endswith(".draft.delete"):
+        args = {"draft_id": ext}
     if args is None or not ext:
         raise PolicyError(409, "not_undoable", "This action can't be undone automatically.")
     return P.ActionSpec(action_type=inverse_type, args=args, timezone=a["timezone"],

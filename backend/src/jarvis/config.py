@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # Google OAuth (web server flow). Client secret only from env.
     google_client_id: str | None = None
     google_client_secret: str | None = None
+    microsoft_client_id: str | None = None
+    microsoft_client_secret: str | None = None
+    microsoft_tenant: str = "common"      # "common" covers personal outlook.com and work/school accounts
 
     # Web Push VAPID
     vapid_public_key: str | None = None

@@ -81,6 +81,7 @@ def create_app() -> FastAPI:
 
     from jarvis.api import routes, v4
     app.include_router(routes.public)
+    app.include_router(v4.public)
     app.include_router(routes.router, dependencies=[Depends(require_session)])
     app.include_router(v4.router, dependencies=[Depends(require_session)])
 

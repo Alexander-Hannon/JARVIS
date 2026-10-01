@@ -208,3 +208,49 @@ def github_provider(conn: sqlite3.Connection):
 
 def is_simulated(adapter: Any) -> bool:
     return bool(getattr(adapter, "simulated", False))
+
+
+# ---------- mail (Gmail rides on the Google account with purpose "gmail"; Outlook on the Microsoft account) ----------
+MAILBOXES = ("gmail", "outlook")
+_MAIL_ACCOUNT = {"gmail": ("google", "gmail"), "outlook": ("microsoft", "mail")}
+
+
+def mail_account(conn: sqlite3.Connection, box: str) -> dict | None:
+    provider, purpose = _MAIL_ACCOUNT[box]
+    acct = get_account(conn, provider)
+    if acct and purpose in acct["config"].get("purposes", []):
+        return acct
+    return None
+
+
+def connected_mailboxes(conn: sqlite3.Connection) -> list[str]:
+    return [b for b in MAILBOXES if b in _overrides or mail_account(conn, b)]
+
+
+def _microsoft_credentials(conn: sqlite3.Connection, acct: dict):
+    from jarvis.integrations.microsoft import MicrosoftCredentials
+    s = get_settings()
+    if not (s.microsoft_client_id and s.microsoft_client_secret):
+        raise NotConnected("outlook", "Microsoft OAuth client is not configured (JARVIS_MICROSOFT_CLIENT_ID/SECRET).")
+    tokens = json.loads(read_secret(acct) or "{}")
+    aid = acct["id"]
+
+    def updater(new_tokens: dict) -> None:
+        from jarvis.core.db import connection
+        with connection() as c2:
+            update_secret(c2, aid, json.dumps(new_tokens))
+    return MicrosoftCredentials(tokens, s.microsoft_client_id, s.microsoft_client_secret, s.microsoft_tenant,
+                                token_updater=updater)
+
+
+def mail_provider(conn: sqlite3.Connection, box: str):
+    if box in _overrides:
+        return _overrides[box]
+    acct = mail_account(conn, box)
+    if not acct or acct["status"] not in ("connected", "error"):
+        raise NotConnected(box, "Connect it in Settings → Integrations.")
+    if box == "gmail":
+        from jarvis.integrations.gmail import GmailAdapter
+        return GmailAdapter(_google_credentials(conn, acct))
+    from jarvis.integrations.microsoft import OutlookAdapter
+    return OutlookAdapter(_microsoft_credentials(conn, acct))

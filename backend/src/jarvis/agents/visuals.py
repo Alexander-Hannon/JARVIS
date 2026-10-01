@@ -55,3 +55,9 @@ def tasks(items: list[dict], title: str) -> dict:
 
 def slots(day: date, minutes: int, items: list[dict]) -> dict:
     return {"type": "slots", "date": day.isoformat(), "label": day.strftime("%a %b %-d"), "minutes": minutes, "slots": items[:6]}
+
+
+def inbox(items: list[dict], counts: dict) -> dict:
+    return {"type": "inbox", "counts": counts,
+            "messages": [{k: m.get(k) for k in ("ref", "mailbox", "category", "from_name", "subject", "snippet", "date",
+                                                "unread", "web_url")} for m in items[:10]]}

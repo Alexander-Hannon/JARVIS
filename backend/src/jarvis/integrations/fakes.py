@@ -22,6 +22,7 @@ use with a timeout error (outcome_known=False) to simulate "applied at provider,
 from __future__ import annotations
 
 import copy
+import dataclasses
 import itertools
 from collections import defaultdict, deque
 from datetime import UTC, date, datetime
@@ -389,3 +390,91 @@ def _merge_patch(raw: dict, body: dict) -> None:
         else:
             raw[k] = copy.deepcopy(v)
 
+
+
+# =========================================================================== Mail (Gmail / Outlook)
+
+class FakeMail(_FaultMixin):
+    """Emulates the MailProvider contract for both Gmail and Outlook.
+
+    * drafts carry their op_key out of band (like the X-Jarvis-Op header / Graph extended property);
+    * create_draft is NOT idempotent (neither real API is) -- reconciliation via find_draft_by_op is what prevents
+      duplicates, so tests prove the executor does it;
+    * send_draft moves a draft to `sent` (tests assert nothing is ever sent without the T2 path);
+    * ``external_receive`` simulates new inbox mail.
+    """
+    simulated = True
+
+    def __init__(self, name: str = "gmail", me: str = "aj@example.test") -> None:
+        from .base import MailMessage
+        self._MailMessage = MailMessage
+        self.name = name
+        self.me = me
+        self.inbox: dict[str, Any] = {}
+        self.drafts: dict[str, Any] = {}
+        self.sent: list[Any] = []
+        self._ids = itertools.count(1)
+        self._init_faults()
+
+    def external_receive(self, sender: str, subject: str, body: str, *, thread_id: str | None = None,
+                         unread: bool = True, date: str | None = None, important: bool = False) -> Any:
+        mid = f"m{next(self._ids)}"
+        name, _, addr = sender.partition("<")
+        email = (addr.rstrip(">") or name).strip().lower()
+        m = self._MailMessage(id=mid, thread_id=thread_id or f"t{mid}", subject=subject, sender=sender, sender_email=email,
+                              to=[self.me], date=date or _now_iso()[:19] + "Z", snippet=body[:120], body_text=body,
+                              unread=unread, important=important, message_id_header=f"<{mid}@example.test>",
+                              web_url=f"https://mail.example.test/{mid}")
+        self.inbox[mid] = m
+        return m
+
+    def whoami(self) -> dict:
+        return {"email": self.me, "name": "AJ (SIMULATED)"}
+
+    def list_messages(self, query: str | None, max_results: int, unread_only: bool = False) -> list:
+        def go():
+            ms = sorted(self.inbox.values(), key=lambda m: m.date or "", reverse=True)
+            if unread_only:
+                ms = [m for m in ms if m.unread]
+            if query:
+                q = query.lower()
+                ms = [m for m in ms if q in (m.subject + " " + m.sender + " " + (m.body_text or "")).lower()]
+            return [dataclasses.replace(m, body_text=None) for m in ms[:max_results]]
+        return self._run("list_messages", (query,), go)
+
+    def get_message(self, message_id: str):
+        return self._run("get_message", (message_id,), lambda: copy.copy(self.inbox.get(message_id)))
+
+    def get_thread(self, thread_id: str) -> list:
+        return self._run("get_thread", (thread_id,), lambda: sorted(
+            [m for m in self.inbox.values() if m.thread_id == thread_id], key=lambda m: m.date or ""))
+
+    def create_draft(self, op_key: str, to: list[str], subject: str, body: str, *, cc=None, reply_to=None):
+        from .base import MailDraft
+
+        def go():
+            did = f"d{next(self._ids)}"
+            d = MailDraft(id=did, message_id=f"msg-{did}", thread_id=reply_to.thread_id if reply_to else None, to=list(to),
+                          subject=subject, body_text=body, op_key=op_key, web_url=f"https://mail.example.test/drafts/{did}")
+            self.drafts[did] = d
+            return copy.copy(d)
+        return self._run("create_draft", (op_key,), go)
+
+    def get_draft(self, draft_id: str):
+        return self._run("get_draft", (draft_id,), lambda: copy.copy(self.drafts.get(draft_id)))
+
+    def find_draft_by_op(self, op_key: str):
+        return self._run("find_draft_by_op", (op_key,),
+                         lambda: next((copy.copy(d) for d in self.drafts.values() if d.op_key == op_key), None))
+
+    def delete_draft(self, draft_id: str) -> None:
+        self._run("delete_draft", (draft_id,), lambda: self.drafts.pop(draft_id, None))
+
+    def send_draft(self, draft_id: str) -> str:
+        def go():
+            d = self.drafts.pop(draft_id, None)
+            if d is None:
+                raise ProviderError("not_found", "draft not found")
+            self.sent.append(d)
+            return d.message_id
+        return self._run("send_draft", (draft_id,), go)

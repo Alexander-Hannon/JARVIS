@@ -5,19 +5,23 @@ import json
 import time
 from collections.abc import Iterator
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from jarvis.actions import policy
 from jarvis.actions import proposals as P
 from jarvis.api.app import db, require_session
+from jarvis.config import get_settings
 from jarvis.core.db import get_conn, jload, row, rows
 
 STREAM_MAX_SECONDS = 600       # long missions can outlive this; the client reconnects with ?after=<last id>
 STREAM_WAIT_FOR_RUN = 15       # the client opens the stream before its POST /commands creates the run
 
 router = APIRouter(prefix="/api")
+public = APIRouter(prefix="/api")      # OAuth callbacks only (cross-site redirect: no Strict session cookie arrives)
+MS_BINDING_COOKIE = "jarvis_ms_oauth_binding"
+MS_CALLBACK_PATH = "/api/integrations/microsoft/callback"
 
 
 def _err(e: policy.PolicyError | P.ProposalError):
@@ -120,3 +124,81 @@ def stream_run(run_id: str, after: int = 0):
     """Server-sent run events (route/tool/status/approval/verify) as they happen. Replaces 700 ms polling."""
     return StreamingResponse(_stream(run_id, after), media_type="text/event-stream",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+# ------------------------------------------------------------------------------------------------ mail
+def _serr(e):
+    raise HTTPException(400, {"code": e.code, "message": e.message})
+
+
+@router.get("/integrations/microsoft/setup")
+def microsoft_setup():
+    from jarvis.integrations.service import microsoft_setup_info
+    return microsoft_setup_info()
+
+
+class MsStartIn(BaseModel):
+    with_send: bool = False
+
+
+@router.post("/integrations/microsoft/start")
+def microsoft_start(body: MsStartIn, response: Response, conn=Depends(db)):
+    from jarvis.integrations.service import SetupError
+    from jarvis.integrations.service import microsoft_start as ms
+    try:
+        url, binding = ms(conn, "mail", body.with_send)
+    except SetupError as e:
+        _serr(e)
+    response.set_cookie(MS_BINDING_COOKIE, binding, httponly=True, samesite="lax", secure=get_settings().remote_mode,
+                        max_age=600, path=MS_CALLBACK_PATH)
+    return {"auth_url": url}
+
+
+@public.get("/integrations/microsoft/callback")
+def microsoft_callback(request: Request, state: str = "", code: str | None = None, error: str | None = None,
+                       conn=Depends(db)):
+    # Same model as the Google callback: single-use state + PKCE verifier server-side + Lax binding cookie.
+    from jarvis.integrations.service import SetupError
+    from jarvis.integrations.service import microsoft_callback as cb
+    try:
+        cb(conn, state, code, error, request.cookies.get(MS_BINDING_COOKIE))
+        resp = RedirectResponse("/settings?connected=microsoft", status_code=303)
+    except SetupError as e:
+        resp = RedirectResponse(f"/settings?connect_error={e.code}", status_code=303)
+    resp.delete_cookie(MS_BINDING_COOKIE, path=MS_CALLBACK_PATH)
+    return resp
+
+
+class SendingIn(BaseModel):
+    mailbox: str
+    enabled: bool
+
+
+@router.post("/integrations/mail/sending")
+def mail_sending(body: SendingIn, conn=Depends(db)):
+    from jarvis.integrations.service import SetupError, set_mail_sending
+    try:
+        return set_mail_sending(conn, body.mailbox, body.enabled)
+    except SetupError as e:
+        _serr(e)
+
+
+@router.get("/inbox")
+def inbox(unread_only: bool = True, limit: int = 25, q: str | None = None, conn=Depends(db)):
+    from jarvis.mail import service as M
+    return M.inbox(conn, unread_only=unread_only, limit=max(1, min(limit, 50)), query=q) | {"mailboxes": M.status(conn)}
+
+
+@router.get("/inbox/thread")
+def inbox_thread(ref: str, conn=Depends(db)):
+    from jarvis.integrations.accounts import NotConnected
+    from jarvis.integrations.base import ProviderError
+    from jarvis.mail import service as M
+    try:
+        return M.read_thread(conn, ref)
+    except M.MailError as e:
+        raise HTTPException(404 if e.code == "not_found" else 400, {"code": e.code, "message": e.message}) from None
+    except NotConnected as e:
+        raise HTTPException(409, {"code": "not_connected", "message": str(e)}) from None
+    except ProviderError as e:
+        raise HTTPException(502, {"code": e.kind, "message": "The mail provider didn't respond."}) from None

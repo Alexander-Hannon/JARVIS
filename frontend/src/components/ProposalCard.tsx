@@ -44,6 +44,39 @@ function ArgsList({ item, editable }: { item: ProposedItem; editable: boolean })
   );
 }
 
+const isMail = (t: string) => /^(gmail|outlook)\.(draft\.create|send)$/.test(t);
+
+function EmailPreview({ item }: { item: ProposedItem }) {
+  const src = (item.action_type.endsWith('.send') ? item.before : item.after) ?? item.args;
+  const to = (src.to as string[] | undefined) ?? [];
+  const cc = (src.cc as string[] | undefined) ?? [];
+  const sending = item.action_type.endsWith('.send');
+  return (
+    <div className={`email-preview${sending ? ' email-send' : ''}`} data-testid="email-preview">
+      {sending ? (
+        <p className="warn-text">
+          <strong>This sends the email.</strong> It can't be unsent.
+        </p>
+      ) : (
+        <p className="muted small">Saved as a draft in your mailbox. Nothing is sent.</p>
+      )}
+      <dl className="email-head">
+        <dt>To</dt>
+        <dd>{to.join(', ') || '—'}</dd>
+        {cc.length > 0 && (
+          <>
+            <dt>Cc</dt>
+            <dd>{cc.join(', ')}</dd>
+          </>
+        )}
+        <dt>Subject</dt>
+        <dd>{String(src.subject ?? '')}</dd>
+      </dl>
+      <pre className="email-body">{String(src.body ?? '')}</pre>
+    </div>
+  );
+}
+
 function BeforeAfter({ item }: { item: ProposedItem }) {
   if (!item.before && !item.after) return null;
   const before = item.before ?? {};
@@ -78,7 +111,9 @@ function BeforeAfter({ item }: { item: ProposedItem }) {
 
 function EditItemForm({ item, onSave, onCancel, busy }: { item: ProposedItem; onSave: (args: Args) => void; onCancel: () => void; busy: boolean }) {
   // Setup blockers (e.g. "Todoist not connected …") are shown in the Needs line, not as editable fields.
-  const keys = orderedKeys(item.args, item.missing_fields.filter((m) => /^[a-z_]+$/.test(m)));
+  const keys = isMail(item.action_type)
+    ? ['subject', 'body'] // recipients are destinations: re-propose to change them
+    : orderedKeys(item.args, item.missing_fields.filter((m) => /^[a-z_]+$/.test(m)));
   const [draft, setDraft] = useState<Record<string, string>>(() =>
     Object.fromEntries(keys.map((k) => {
       const v = item.args[k];
@@ -123,6 +158,8 @@ function EditItemForm({ item, onSave, onCancel, busy }: { item: ProposedItem; on
               <option value="true">Yes</option>
               <option value="false">No</option>
             </select>
+          ) : k === 'body' ? (
+            <textarea rows={8} value={draft[k] ?? ''} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} />
           ) : (
             <input
               value={draft[k] ?? ''}
@@ -501,15 +538,23 @@ export function ProposalCard({ proposal: initial, onChanged, onCorrection }: Pro
                 <EditItemForm item={it} busy={busy === 'revise'} onCancel={() => setEditing(null)} onSave={(args) => void revise(it.index, args)} />
               ) : (
                 <>
-                  <ArgsList item={it} editable={isOpen && !expired} />
-                  <BeforeAfter item={it} />
+                  {isMail(it.action_type) ? (
+                    <EmailPreview item={it} />
+                  ) : (
+                    <>
+                      <ArgsList item={it} editable={isOpen && !expired} />
+                      <BeforeAfter item={it} />
+                    </>
+                  )}
                   {it.expected_effect && <p className="effect">Effect: {it.expected_effect}</p>}
                   {it.reason && <p className="muted small">Why: {it.reason}</p>}
                   {isOpen && !expired && (
                     <div className="row gap">
-                      <button type="button" className="btn btn-small" onClick={() => setEditing(it.index)} disabled={!!busy}>
-                        Edit
-                      </button>
+                      {!it.action_type.endsWith('.send') && (
+                        <button type="button" className="btn btn-small" onClick={() => setEditing(it.index)} disabled={!!busy}>
+                          Edit
+                        </button>
+                      )}
                       {p.items.length > 1 && (
                         <button type="button" className="btn btn-small btn-ghost" onClick={() => void revise(it.index, null)} disabled={!!busy}>
                           Remove from plan

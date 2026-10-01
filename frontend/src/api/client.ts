@@ -195,7 +195,21 @@ export const api = {
   todoistTarget: (project_id: string) => request<T.Integration>('/api/integrations/todoist/target', { json: { project_id } }),
   todoistSync: () => request<{ pulled: number; reconciled: number }>('/api/integrations/todoist/sync', { method: 'POST' }),
   googleSetup: () => request<T.GoogleSetup>('/api/integrations/google/setup'),
-  googleStart: (purpose: 'calendar' | 'drive') => request<{ auth_url: string }>('/api/integrations/google/start', { json: { purpose } }),
+  googleStart: (purpose: 'calendar' | 'drive' | 'gmail') =>
+    request<{ auth_url: string }>('/api/integrations/google/start', { json: { purpose } }),
+  microsoftSetup: () => request<T.MicrosoftSetup>('/api/integrations/microsoft/setup'),
+  microsoftStart: (with_send = false) =>
+    request<{ auth_url: string }>('/api/integrations/microsoft/start', { json: { with_send } }),
+  setMailSending: (mailbox: T.Mailbox, enabled: boolean) =>
+    request<T.Integration>('/api/integrations/mail/sending', { json: { mailbox, enabled } }),
+  inbox: (params: { unread_only?: boolean; limit?: number; q?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.unread_only !== undefined) qs.set('unread_only', String(params.unread_only));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.q) qs.set('q', params.q);
+    return request<T.InboxResponse>(`/api/inbox?${qs.toString()}`);
+  },
+  inboxThread: (ref: string) => request<T.MailThread>(`/api/inbox/thread?ref=${encodeURIComponent(ref)}`),
   googleCalendars: () => request<T.GoogleCalendar[]>('/api/integrations/google/calendars'),
   setGoogleCalendars: (read: string[], write_target: string | null) => request<unknown>('/api/integrations/google/calendars', { json: { read, write_target } }),
   driveRoots: () => request<unknown>('/api/integrations/drive/roots'),
