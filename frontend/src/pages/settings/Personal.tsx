@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../../api/client';
-import type { PairingCode, VoiceStatus } from '../../api/types';
+import type { PairingCode, VaultStatus, VoiceStatus } from '../../api/types';
 import { SpeechControls } from '../../components/SpeechControls';
 import { Async, Badge, Card, ErrorBox, KV, StateBadge, Toggle } from '../../components/ui';
 import { fmtDateTime, fmtRelative } from '../../lib/format';
@@ -115,8 +115,43 @@ export function PrivacySection() {
   );
 }
 
+function VaultToggle({ rootId, vault, onChanged }: { rootId: string; vault: VaultStatus | null; onChanged: () => void }) {
+  const on = !!vault?.indexed_roots?.includes(rootId);
+  const last = vault?.last_index?.[rootId];
+  const [err, setErr] = useState<unknown>(null);
+  return (
+    <div className="vault-toggle small">
+      <Toggle
+        label="Index into search (notes become searchable by JARVIS)"
+        checked={on}
+        onChange={async (v) => {
+          setErr(null);
+          try {
+            await api.setVaultIndexed(rootId, v);
+            onChanged();
+          } catch (e) {
+            setErr(e);
+          }
+        }}
+      />
+      {on && (
+        <span className="muted">
+          {last
+            ? `Indexed ${fmtRelative(last.at)}: ${last.new_or_changed} new/changed, ${last.unchanged} unchanged, ${last.removed} removed${last.failed ? `, ${last.failed} failed` : ''}`
+            : 'Indexing queued: the worker picks it up within seconds.'}{' '}
+          <button type="button" className="btn btn-small btn-ghost" onClick={() => void api.reindexVault(rootId).then(onChanged)}>
+            Re-index now
+          </button>
+        </span>
+      )}
+      <ErrorBox error={err} />
+    </div>
+  );
+}
+
 export function LocalOpsSection() {
   const roots = useAsync(() => api.localRoots(), []);
+  const vault = useAsync(() => api.vault(), []);
   const [path, setPath] = useState('');
   const [label, setLabel] = useState('');
   const [writable, setWritable] = useState(false);
@@ -132,6 +167,7 @@ export function LocalOpsSection() {
               <li key={r.id} className="list-row">
                 <div className="grow">
                   <strong>{r.label}</strong> <code className="small">{r.path}</code> {r.writable ? <Badge tone="warn">writable (with approval)</Badge> : <Badge tone="neutral">read-only</Badge>}
+                  <VaultToggle rootId={r.id} vault={vault.data ?? null} onChanged={() => void vault.reload()} />
                 </div>
                 {confirmId === r.id ? (
                   <span className="confirm">

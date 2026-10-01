@@ -560,3 +560,8 @@ export interface MicrosoftSetup {
   send_scope_added_when_enabled: string;
   steps: string[];
 }
+
+export interface VaultStatus {
+  indexed_roots: string[];
+  last_index: Record<string, { at: ISODate; new_or_changed: number; unchanged: number; removed: number; skipped: number; failed: number }>;
+}

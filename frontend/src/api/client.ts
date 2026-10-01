@@ -225,6 +225,10 @@ export const api = {
   disconnect: (account_id: string) => request<unknown>(`/api/integrations/${encodeURIComponent(account_id)}`, { method: 'DELETE' }),
   localRoots: () => request<T.LocalRoot[]>('/api/localops/roots'),
   addLocalRoot: (r: { path: string; label: string; writable: boolean }) => request<T.LocalRoot>('/api/localops/roots', { json: r }),
+  vault: () => request<T.VaultStatus>('/api/vault'),
+  setVaultIndexed: (rootId: string, enabled: boolean) =>
+    request<T.VaultStatus>(`/api/vault/roots/${encodeURIComponent(rootId)}`, { json: { enabled } }),
+  reindexVault: (rootId: string) => request<{ queued: boolean }>(`/api/vault/roots/${encodeURIComponent(rootId)}/reindex`, { method: 'POST' }),
   removeLocalRoot: (id: string) => request<unknown>(`/api/localops/roots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   settings: () => request<T.Settings>('/api/settings'),

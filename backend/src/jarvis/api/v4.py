@@ -202,3 +202,38 @@ def inbox_thread(ref: str, conn=Depends(db)):
         raise HTTPException(409, {"code": "not_connected", "message": str(e)}) from None
     except ProviderError as e:
         raise HTTPException(502, {"code": e.kind, "message": "The mail provider didn't respond."}) from None
+
+
+# ------------------------------------------------------------------------------------------------ vault indexing
+class VaultIn(BaseModel):
+    enabled: bool
+
+
+@router.get("/vault")
+def vault_status(conn=Depends(db)):
+    from jarvis.knowledge import vault
+    return vault.status(conn)
+
+
+@router.post("/vault/roots/{root_id}")
+def vault_toggle(root_id: str, body: VaultIn, conn=Depends(db)):
+    from jarvis.core import jobs
+    from jarvis.knowledge import vault
+    from jarvis.localops.files import FileOpError
+    try:
+        vault.set_indexed(conn, root_id, body.enabled)
+    except FileOpError as e:
+        raise HTTPException(400, {"code": e.code, "message": e.message}) from None
+    if body.enabled:
+        jobs.enqueue(conn, "vault_index", {"root_id": root_id}, dedupe_key=f"vault:{root_id}:now:{time.time_ns()}")
+    return vault.status(conn)
+
+
+@router.post("/vault/roots/{root_id}/reindex")
+def vault_reindex(root_id: str, conn=Depends(db)):
+    from jarvis.core import jobs
+    from jarvis.knowledge import vault
+    if root_id not in vault.indexed_roots(conn):
+        raise HTTPException(409, {"code": "not_indexed", "message": "Turn on search indexing for this folder first."})
+    jobs.enqueue(conn, "vault_index", {"root_id": root_id}, dedupe_key=f"vault:{root_id}:now:{time.time_ns()}")
+    return {"queued": True}

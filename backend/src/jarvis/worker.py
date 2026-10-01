@@ -52,6 +52,9 @@ def handle_job(conn, job: dict, worker_id: str) -> None:
         elif kind == "todoist_sync":
             from jarvis.integrations import service
             jobs.complete(conn, job["id"], worker_id, service.todoist_sync(conn))
+        elif kind == "vault_index":
+            from jarvis.knowledge import vault
+            jobs.complete(conn, job["id"], worker_id, vault.index_root(conn, payload["root_id"]))
         else:
             jobs.fail(conn, job, worker_id, f"unknown job kind {kind}", retry=False)
     except Exception as e:  # visible failure, bounded retries
@@ -91,6 +94,11 @@ def maybe_periodic(conn, last: dict) -> None:
     if now - last.get("ics", 0) > 3600 and A.get_account(conn, "ics"):
         jobs.enqueue(conn, "ics_refresh", {}, dedupe_key=f"ics:{int(time.time() // 3600)}")
         last["ics"] = now
+    if now - last.get("vault", 0) > 1800:
+        from jarvis.knowledge import vault
+        for rid in vault.indexed_roots(conn):
+            jobs.enqueue(conn, "vault_index", {"root_id": rid}, dedupe_key=f"vault:{rid}:{int(time.time() // 1800)}")
+        last["vault"] = now
     if now - last.get("todoist", 0) > 900 and A.get_account(conn, "todoist"):
         jobs.enqueue(conn, "todoist_sync", {}, dedupe_key=f"tsync:{int(time.time() // 900)}")
         last["todoist"] = now

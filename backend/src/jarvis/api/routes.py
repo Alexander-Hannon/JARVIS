@@ -1074,7 +1074,9 @@ def add_root(body: RootIn, conn=Depends(db)):
 
 @router.delete("/localops/roots/{rid}")
 def del_root(rid: str, conn=Depends(db)):
+    from jarvis.knowledge import vault
     from jarvis.localops.files import remove_root
+    vault.forget_root(conn, rid)        # a removed root's notes must not stay searchable
     remove_root(conn, rid)
     return {"ok": True}
 
