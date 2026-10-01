@@ -143,3 +143,21 @@ def test_local_jarvis_tts_is_intelligible(client):
     from jarvis.voice.stt import decode_audio, get_engine
     t = get_engine().transcribe(decode_audio(r.content))
     assert "tasks" in t.text.lower() and "ready" in t.text.lower() and "add them" in t.text.lower()
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("Yo Jarvis is Ahmad Hardy back at Mizzou? Subs by www.zeoranger.co.uk", "Yo Jarvis is Ahmad Hardy back at Mizzou?"),
+    ("Thanks for watching!", ""),
+    ("Subtitles by the Amara.org community", ""),
+    ("Remind me to grade IS 640 tomorrow.", "Remind me to grade IS 640 tomorrow."),
+    ("Check www.alabama.com for the score", "Check for the score"),
+])
+def test_whisper_hallucinated_credits_are_removed(raw, expected):
+    from jarvis.voice.stt import clean_segment
+    assert clean_segment(raw, 0.1, -0.3, 1.2) == expected
+
+
+def test_low_confidence_silence_segment_dropped():
+    from jarvis.voice.stt import clean_segment
+    assert clean_segment("you", 0.85, -1.2, 1.0) == ""
+    assert clean_segment("you you you you you you you you", 0.1, -0.2, 3.1) == ""
