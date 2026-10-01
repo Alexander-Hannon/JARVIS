@@ -124,3 +124,51 @@ class RepoStatusProvider(Protocol):
     name: str  # "github"
 
     def repo_status(self, full_name: str) -> dict: ...   # {repo, open_issues:[...], open_prs:[...], default_branch, pushed_at, url}
+
+
+@dataclass
+class MailMessage:
+    id: str
+    thread_id: str
+    subject: str
+    sender: str                         # "Name <addr>" as the provider reports it
+    sender_email: str
+    to: list[str] = field(default_factory=list)
+    cc: list[str] = field(default_factory=list)
+    date: str | None = None             # UTC ISO instant
+    snippet: str = ""
+    body_text: str | None = None        # only on get_message/get_thread (plain text; HTML is stripped)
+    unread: bool = False
+    important: bool = False
+    labels: list[str] = field(default_factory=list)
+    message_id_header: str | None = None   # RFC 5322 Message-ID, for In-Reply-To/References on replies
+    web_url: str | None = None
+
+
+@dataclass
+class MailDraft:
+    id: str
+    message_id: str
+    thread_id: str | None
+    to: list[str]
+    subject: str
+    body_text: str
+    op_key: str | None = None           # X-Jarvis-Op header / extended property used for reconciliation
+    web_url: str | None = None
+
+
+class MailProvider(Protocol):
+    """Gmail / Outlook. Drafting never contacts anyone; `send_draft` exists only behind a T2 action AJ enabled."""
+    name: str  # "gmail" | "outlook"
+
+    def whoami(self) -> dict: ...                                       # {email, name}
+    def list_messages(self, query: str | None, max_results: int, unread_only: bool = False) -> list[MailMessage]: ...
+    def get_message(self, message_id: str) -> MailMessage | None: ...
+    def get_thread(self, thread_id: str) -> list[MailMessage]: ...
+    # Writes. Drafts carry `op_key` in a hidden header/property (never in the visible body) for reconciliation.
+    def create_draft(self, op_key: str, to: list[str], subject: str, body: str, *, cc: list[str] | None = None,
+                     reply_to: MailMessage | None = None) -> MailDraft: ...
+    def get_draft(self, draft_id: str) -> MailDraft | None: ...
+    def find_draft_by_op(self, op_key: str) -> MailDraft | None: ...
+    def delete_draft(self, draft_id: str) -> None: ...
+    def send_draft(self, draft_id: str) -> str: ...                     # returns the sent message id

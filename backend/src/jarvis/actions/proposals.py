@@ -15,16 +15,11 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
+from jarvis.actions import registry as R
 from jarvis.core import jobs
 from jarvis.core.db import jdump, jload, row, rows, tx
 from jarvis.core.util import audit, canonical_hash, iso, new_id, now_iso, parse_iso, utcnow
 
-ALLOWED_ACTIONS = {
-    "task.create": "todoist", "task.update": "todoist", "task.complete": "todoist", "task.reopen": "todoist",
-    "task.delete": "todoist",
-    "event.create": "google_calendar", "event.update": "google_calendar", "event.delete": "google_calendar",
-    "file.write": "local_fs", "file.move": "local_fs",
-}
 PROPOSAL_TTL = timedelta(hours=12)
 EXECUTION_WINDOW = timedelta(hours=24)   # an approval older than this cannot start/ retry execution
 TERMINAL_ITEM = {"verified", "failed", "unknown", "conflict", "cancelled", "skipped", "superseded"}
@@ -63,7 +58,7 @@ def _version_hash(specs: list[ActionSpec]) -> str:
 def _insert_version(conn, proposal_id: str, version: int, specs: list[ActionSpec], summary: str, reason: str | None,
                     assumptions: list[str], questions: list[str], source: dict) -> str:
     for s in specs:
-        if s.action_type not in ALLOWED_ACTIONS:
+        if R.provider_for(s.action_type) is None:
             raise ProposalError(400, "action_not_allowed", f"Action type '{s.action_type}' is not enabled in this release.")
     vid = new_id("pv")
     h = _version_hash(specs)
@@ -78,7 +73,7 @@ def _insert_version(conn, proposal_id: str, version: int, specs: list[ActionSpec
             "INSERT INTO proposed_actions (id, proposal_version_id, item_index, action_type, provider, account_id, "
             "target_resource, args, timezone, before_state, after_state, preconditions, expected_effect, reason, "
             "missing_fields, op_key, state, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'proposed', ?)",
-            (new_id("act"), vid, i, s.action_type, ALLOWED_ACTIONS[s.action_type], s.account_id, s.target_resource,
+            (new_id("act"), vid, i, s.action_type, R.provider_for(s.action_type), s.account_id, s.target_resource,
              jdump(s.args | ({"_target_name": s.target_name} if s.target_name else {})), s.timezone,
              jdump(s.before) if s.before is not None else None, jdump(s.after) if s.after is not None else None,
              jdump(s.preconditions), s.expected_effect, s.reason, jdump(s.missing_fields),
@@ -88,11 +83,13 @@ def _insert_version(conn, proposal_id: str, version: int, specs: list[ActionSpec
 
 def create(conn: sqlite3.Connection, title: str, specs: list[ActionSpec], summary: str, *, conversation_id: str | None,
            run_id: str | None = None, capture_id: str | None = None, reason: str | None = None,
-           assumptions: list[str] | None = None, questions: list[str] | None = None, source: dict | None = None) -> str:
+           assumptions: list[str] | None = None, questions: list[str] | None = None, source: dict | None = None,
+           origin: str = "command") -> str:
     pid = new_id("prop")
     now = now_iso()
     conn.execute("INSERT INTO proposals (id, conversation_id, run_id, capture_id, status, current_version, title, created_at, "
-                 "updated_at) VALUES (?,?,?,?, 'proposed', 1, ?,?,?)", (pid, conversation_id, run_id, capture_id, title, now, now))
+                 "updated_at, origin) VALUES (?,?,?,?, 'proposed', 1, ?,?,?,?)",
+                 (pid, conversation_id, run_id, capture_id, title, now, now, origin))
     _insert_version(conn, pid, 1, specs, summary, reason, assumptions or [], questions or [], source or {})
     audit(conn, "model" if run_id else "user", "proposal.created", f"Proposed: {title}", "proposal", pid,
           {"items": [s.action_type for s in specs]})

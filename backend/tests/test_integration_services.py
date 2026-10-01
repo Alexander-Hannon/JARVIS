@@ -120,7 +120,7 @@ def test_google_callback_works_without_strict_session_cookie(client, conn, monke
     # same browser, session cookie withheld (as with a cross-site redirect) — succeeds
     same = TestClient(client.c.app, cookies={"jarvis_oauth_binding": binding})
     r = same.get(f"/api/integrations/google/callback?state={state}&code=abc", follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/settings?connected=google"
+    assert r.status_code == 303 and r.headers["location"] == "/connections?connected=google"
     acct = conn.execute("SELECT label, config, secret_ciphertext FROM integration_accounts WHERE provider='google'").fetchone()
     assert acct["label"] == "aj@uah.example" and b"refresh-PLAINTEXT-4f9c2a" not in acct["secret_ciphertext"]
     # replaying the same state is refused

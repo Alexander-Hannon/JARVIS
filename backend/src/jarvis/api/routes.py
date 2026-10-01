@@ -97,10 +97,10 @@ def google_callback(request: Request, state: str = "", code: str | None = None, 
     resp_err = None
     try:
         cb(conn, state, code, error, request.cookies.get(OAUTH_BINDING_COOKIE))
-        resp = RedirectResponse("/settings?connected=google", status_code=303)
+        resp = RedirectResponse("/connections?connected=google", status_code=303)
     except SetupError as e:
         resp_err = e.code
-        resp = RedirectResponse(f"/settings?connect_error={resp_err}", status_code=303)
+        resp = RedirectResponse(f"/connections?connect_error={resp_err}", status_code=303)
     resp.delete_cookie(OAUTH_BINDING_COOKIE, path=OAUTH_CALLBACK_PATH)
     return resp
 
@@ -393,7 +393,9 @@ EDITABLE_ARGS = {"task.create": {"content", "description", "due_date", "due_date
                                  "duration", "duration_unit"},
                  "event.create": {"summary", "description", "start", "end"},
                  "task.update": {"content", "description", "due_date", "due_datetime", "priority"},
-                 "file.write": {"path", "content"}}
+                 "file.write": {"path", "content"},
+                 # recipients are destinations: never editable here (re-propose instead)
+                 "gmail.draft.create": {"subject", "body"}, "outlook.draft.create": {"subject", "body"}}
 
 
 @router.post("/proposals/{pid}/revise")
@@ -427,6 +429,10 @@ def revise(pid: str, body: ReviseIn, conn=Depends(db)):
                 sp.expected_effect = f"Create Todoist task “{sp.args.get('content')}”" + (
                     f" due {sp.args.get('due_datetime') or sp.args.get('due_date')}" if sp.args.get("due_datetime") or
                     sp.args.get("due_date") else "") + (f" in {sp.target_name}" if sp.target_name else "")
+            if sp.action_type.endswith(".draft.create"):
+                sp.after = (sp.after or {}) | {k: sp.args[k] for k in ("subject", "body")}
+                label = "Gmail" if sp.action_type.startswith("gmail") else "Outlook"
+                sp.expected_effect = f"Save a {label} draft to {', '.join(sp.args['to'])}: “{sp.args['subject']}” (not sent)"
             if sp.action_type == "event.create":
                 sp.expected_effect = f"Add “{sp.args.get('summary')}” {sp.args['start'].get('dateTime')} to {sp.target_name}"
                 sp.preconditions["slot_free_at"] = None   # edited time: freshness re-checked at execution
@@ -484,7 +490,9 @@ def action_history(limit: int = 50, conn=Depends(db)):
                     "id": a["id"], "provider": a["provider"], "account_label": acct["label"] if acct else None,
                     "target": {"id": a["target_resource"], "name": jload(a["args"], {}).get("_target_name")},
                     "request_text": asked["text"] if asked else None, "approved_at": appr["created_at"] if appr else None,
-                    "undoable": a["state"] == "verified"})
+                    "undoable": a["state"] == "verified",
+                    "undo_until": a["undo_until"], "undone_by": a["undone_by"],
+                    "auto_approved": bool(appr and appr["channel"] == "policy")})
     return out
 
 
@@ -1066,7 +1074,9 @@ def add_root(body: RootIn, conn=Depends(db)):
 
 @router.delete("/localops/roots/{rid}")
 def del_root(rid: str, conn=Depends(db)):
+    from jarvis.knowledge import vault
     from jarvis.localops.files import remove_root
+    vault.forget_root(conn, rid)        # a removed root's notes must not stay searchable
     remove_root(conn, rid)
     return {"ok": True}
 
@@ -1119,18 +1129,20 @@ class SettingsPatch(BaseModel):
     notifications: dict[str, Any] | None = None
     models: dict[str, str] | None = None
     research: dict[str, Any] | None = None
+    brand: dict[str, str] | None = None
 
 
 @router.get("/brain")
 def brain(conn=Depends(db)):
-    from jarvis.agents import agent
+    from jarvis.agents import agent, tools
     ok, why = agent.available(conn)
     data = jload(row(conn, "SELECT data FROM user_settings WHERE id=1")["data"], {})
     return {"mode": "v2_agent" if ok else "offline", "reason": None if ok else why,
             "web_research": data.get("research", {}).get("web_enabled", True),
             "max_searches": agent.search_limit(conn),
             "model": (data.get("models") or {}).get("agent") or get_settings().model_default,
-            "tools": [t["name"] for t in agent.CLIENT_TOOLS],
+            "tools": [t.name for t in tools.offered(conn)],
+            "assistant_name": agent.assistant_name(conn),
             "notes": "Changes to Todoist/Calendar/files are always proposals you approve. Web search costs ~$0.01 per search "
                      "plus model tokens, all counted against your budget."}
 
@@ -1140,7 +1152,7 @@ def patch_settings(body: SettingsPatch, conn=Depends(db)):
     with tx(conn):
         r = row(conn, "SELECT * FROM user_settings WHERE id=1")
         data = jload(r["data"], {})
-        for k in ("voice", "privacy", "notifications", "models", "research"):
+        for k in ("voice", "privacy", "notifications", "models", "research", "brand"):
             v = getattr(body, k)
             if v is not None:
                 data[k] = data.get(k, {}) | v
@@ -1204,10 +1216,13 @@ def latency(conn=Depends(db)):
 
 
 @router.get("/activity")
-def activity(limit: int = 100, conn=Depends(db)):
-    ev = rows(conn, "SELECT created_at at, kind, message, run_id FROM run_events ORDER BY id DESC LIMIT ?", (min(limit, 500),))
-    au = rows(conn, "SELECT at, kind, summary message, entity_type, entity_id FROM audit_events ORDER BY id DESC LIMIT ?",
-              (min(limit, 500),))
+def activity(limit: int = 100, actor: str | None = None, conn=Depends(db)):
+    # actor filters the audit trail: user (AJ) | policy | mission | channel | system | worker | model
+    ev = [] if actor else rows(conn, "SELECT created_at at, kind, message, run_id FROM run_events ORDER BY id DESC LIMIT ?",
+                               (min(limit, 500),))
+    au = rows(conn, "SELECT at, actor, kind, summary message, entity_type, entity_id FROM audit_events "
+                    + ("WHERE actor=? " if actor else "") + "ORDER BY id DESC LIMIT ?",
+              ((actor, min(limit, 500)) if actor else (min(limit, 500),)))
     return sorted(ev + au, key=lambda e: e["at"], reverse=True)[:limit]
 
 

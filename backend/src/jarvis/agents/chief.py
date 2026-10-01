@@ -42,6 +42,7 @@ class CommandInput:
     attachments: list[str] | None = None
     session_id: str | None = None
     client_run_id: str | None = None
+    origin: str = "command"       # command | channel | mission: decides which auto-approve rules may apply
 
 
 class Reply:
@@ -120,7 +121,8 @@ def handle(conn: sqlite3.Connection, inp: CommandInput) -> dict:
     try:
         if use_agent:
             try:
-                agent.run(conn, inp, reply, run_id, specialists)
+                agent.run(conn, inp, reply, run_id, specialists,
+                          agent.Scope(origin=inp.origin) if inp.origin != "command" else agent.COMMAND_SCOPE)
                 interp = Interpretation("agent")
             except LLMError as e:
                 run_event(conn, run_id, "error", f"Reasoning model unavailable ({e.kind}); offline mode")
@@ -427,7 +429,9 @@ def _dispatch(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id:
     return _question(conn, inp, reply, run_id)
 
 
-def _new_proposal(conn, inp: CommandInput, reply: Reply, run_id: str, title: str, specs, summary: str, assumptions, questions):
+def _new_proposal(conn, inp: CommandInput, reply: Reply, run_id: str, title: str, specs, summary: str, assumptions, questions,
+                  origin: str | None = None):
+    origin = origin if origin not in (None, "command") else inp.origin
     if reply.defer:
         reply.deferred.append((title, specs, summary, assumptions, questions))
         return None
@@ -436,10 +440,17 @@ def _new_proposal(conn, inp: CommandInput, reply: Reply, run_id: str, title: str
         conn.execute("UPDATE proposals SET status='superseded', updated_at=? WHERE id=?", (now_iso(), old["id"]))
         run_event(conn, run_id, "status", "Previous unapproved plan superseded by this one")
     pid = P.create(conn, title, specs, summary, conversation_id=inp.conversation_id, run_id=run_id, capture_id=inp.capture_id,
-                   assumptions=assumptions, questions=questions, source={"capture_id": inp.capture_id, "text": inp.text,
-                                                                           "captured_at": inp.captured_at, "tz": inp.tz})
+                   assumptions=assumptions, questions=questions, origin=origin,
+                   source={"capture_id": inp.capture_id, "text": inp.text, "captured_at": inp.captured_at, "tz": inp.tz})
     reply.proposal_id = pid
-    run_event(conn, run_id, "approval", "Awaiting your approval")
+    from jarvis.actions import policy
+    auto = policy.try_auto_approve(conn, pid)
+    if auto:
+        rules = ", ".join(f"“{x}”" for x in auto["labels"])
+        reply.say(f"Approved automatically by your rule {rules}. You can undo it for the next five minutes.")
+        run_event(conn, run_id, "approval", f"Auto-approved by rule {rules}")
+    else:
+        run_event(conn, run_id, "approval", "Awaiting your approval")
     return pid
 
 

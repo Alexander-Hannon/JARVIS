@@ -195,7 +195,21 @@ export const api = {
   todoistTarget: (project_id: string) => request<T.Integration>('/api/integrations/todoist/target', { json: { project_id } }),
   todoistSync: () => request<{ pulled: number; reconciled: number }>('/api/integrations/todoist/sync', { method: 'POST' }),
   googleSetup: () => request<T.GoogleSetup>('/api/integrations/google/setup'),
-  googleStart: (purpose: 'calendar' | 'drive') => request<{ auth_url: string }>('/api/integrations/google/start', { json: { purpose } }),
+  googleStart: (purpose: 'calendar' | 'drive' | 'gmail') =>
+    request<{ auth_url: string }>('/api/integrations/google/start', { json: { purpose } }),
+  microsoftSetup: () => request<T.MicrosoftSetup>('/api/integrations/microsoft/setup'),
+  microsoftStart: (with_send = false) =>
+    request<{ auth_url: string }>('/api/integrations/microsoft/start', { json: { with_send } }),
+  setMailSending: (mailbox: T.Mailbox, enabled: boolean) =>
+    request<T.Integration>('/api/integrations/mail/sending', { json: { mailbox, enabled } }),
+  inbox: (params: { unread_only?: boolean; limit?: number; q?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.unread_only !== undefined) qs.set('unread_only', String(params.unread_only));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.q) qs.set('q', params.q);
+    return request<T.InboxResponse>(`/api/inbox?${qs.toString()}`);
+  },
+  inboxThread: (ref: string) => request<T.MailThread>(`/api/inbox/thread?ref=${encodeURIComponent(ref)}`),
   googleCalendars: () => request<T.GoogleCalendar[]>('/api/integrations/google/calendars'),
   setGoogleCalendars: (read: string[], write_target: string | null) => request<unknown>('/api/integrations/google/calendars', { json: { read, write_target } }),
   driveRoots: () => request<unknown>('/api/integrations/drive/roots'),
@@ -211,6 +225,30 @@ export const api = {
   disconnect: (account_id: string) => request<unknown>(`/api/integrations/${encodeURIComponent(account_id)}`, { method: 'DELETE' }),
   localRoots: () => request<T.LocalRoot[]>('/api/localops/roots'),
   addLocalRoot: (r: { path: string; label: string; writable: boolean }) => request<T.LocalRoot>('/api/localops/roots', { json: r }),
+  connectors: () => request<T.Connector[]>('/api/connectors'),
+  connectConnector: (id: string, values: Record<string, string>) =>
+    request<T.Connector>(`/api/connectors/${encodeURIComponent(id)}/connect`, { json: { values } }),
+  connectorResources: (id: string) => request<T.ConnectorResources>(`/api/connectors/${encodeURIComponent(id)}/resources`),
+  setConnectorResources: (id: string, sel: { read?: string[]; write?: string[] }) =>
+    request<T.ConnectorResources>(`/api/connectors/${encodeURIComponent(id)}/resources`, { json: sel }),
+  spotifyStart: () => request<{ auth_url: string }>('/api/connectors/spotify/start', { method: 'POST' }),
+  mcpServers: () => request<T.McpServer[]>('/api/mcp'),
+  addMcpServer: (b: { name: string; transport: 'stdio' | 'http'; command?: string; args?: string[]; url?: string; env?: Record<string, string>; bearer?: string }) =>
+    request<T.McpServer>('/api/mcp', { json: b }),
+  discoverMcp: (id: string) => request<T.McpServer>(`/api/mcp/${encodeURIComponent(id)}/discover`, { method: 'POST' }),
+  reviewMcp: (id: string, modes: Record<string, { mode: T.McpMode; tier: 1 | 2 }>) =>
+    request<T.McpServer>(`/api/mcp/${encodeURIComponent(id)}/review`, { json: { modes } }),
+  enableMcp: (id: string, enabled: boolean) => request<T.McpServer>(`/api/mcp/${encodeURIComponent(id)}/enabled`, { json: { enabled } }),
+  removeMcp: (id: string) => request<unknown>(`/api/mcp/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  telegram: () => request<T.TelegramStatus>('/api/channels/telegram'),
+  connectTelegram: (token: string) => request<T.TelegramStatus>('/api/channels/telegram', { json: { token } }),
+  pairTelegram: () => request<{ code: string; instructions: string; expires_in_s: number }>('/api/channels/telegram/pair', { method: 'POST' }),
+  unpairTelegram: () => request<T.TelegramStatus>('/api/channels/telegram/unpair', { method: 'POST' }),
+  telegramNotify: (notify: boolean) => request<T.TelegramStatus>('/api/channels/telegram/notify', { json: { notify } }),
+  vault: () => request<T.VaultStatus>('/api/vault'),
+  setVaultIndexed: (rootId: string, enabled: boolean) =>
+    request<T.VaultStatus>(`/api/vault/roots/${encodeURIComponent(rootId)}`, { json: { enabled } }),
+  reindexVault: (rootId: string) => request<{ queued: boolean }>(`/api/vault/roots/${encodeURIComponent(rootId)}/reindex`, { method: 'POST' }),
   removeLocalRoot: (id: string) => request<unknown>(`/api/localops/roots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   settings: () => request<T.Settings>('/api/settings'),
@@ -218,7 +256,7 @@ export const api = {
   budget: () => request<T.Budget>('/api/budget'),
   weather: () => request<import('../components/Visuals').WeatherVisual>('/api/weather'),
   brain: () =>
-    request<{ mode: 'v2_agent' | 'offline'; reason: string | null; web_research: boolean; max_searches: number; model: string; tools: string[]; notes: string }>(
+    request<{ mode: 'v2_agent' | 'offline'; reason: string | null; web_research: boolean; max_searches: number; model: string; tools: string[]; notes: string; assistant_name?: string }>(
       '/api/brain',
     ),
   setResearch: (research: { web_enabled?: boolean; max_searches?: number }) =>
@@ -226,7 +264,30 @@ export const api = {
   patchBudget: (b: Partial<T.Budget>) => request<T.Budget>('/api/budget', { method: 'PATCH', json: b }),
   doctor: () => request<{ checks: T.DoctorCheck[] }>('/api/doctor'),
   latency: () => request<T.LatencyMetrics>('/api/metrics/latency'),
-  activity: (limit = 100) => request<T.ActivityEvent[]>(`/api/activity${q({ limit })}`),
+  activity: (limit = 100, actor?: string) => request<T.ActivityEvent[]>(`/api/activity${q({ limit, actor })}`),
+  headsup: () => request<{ cards: T.HeadsUpCard[] }>('/api/headsup'),
+  weeklyReport: () => request<T.WeeklyReport>('/api/report/weekly'),
+  manual: () => request<T.Manual>('/api/manual'),
+  manualSearch: (query: string) => request<T.ManualHit[]>(`/api/manual/search${q({ q: query })}`),
+  policies: () => request<T.PoliciesResponse>('/api/policies'),
+  createPolicy: (b: { action_type: string; label: string; match?: Record<string, unknown>; origins?: string[]; daily_cap?: number }) =>
+    request<T.PolicyRule>('/api/policies', { json: b }),
+  revokePolicy: (id: string) => request<T.PolicyRule>(`/api/policies/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  undoAction: (actionId: string) => request<{ proposal_id: string }>(`/api/actions/${encodeURIComponent(actionId)}/undo`, { method: 'POST' }),
+  missions: () => request<T.MissionsResponse>('/api/missions'),
+  createMission: (b: Partial<T.Mission>) => request<T.Mission>('/api/missions', { json: b }),
+  updateMission: (id: string, b: Partial<T.Mission>) => request<T.Mission>(`/api/missions/${encodeURIComponent(id)}`, { method: 'PATCH', json: b }),
+  missionEnabled: (id: string, enabled: boolean) => request<T.Mission>(`/api/missions/${encodeURIComponent(id)}/enabled`, { json: { enabled } }),
+  runMission: (id: string) => request<{ queued: boolean }>(`/api/missions/${encodeURIComponent(id)}/run`, { method: 'POST' }),
+  deleteMission: (id: string) => request<unknown>(`/api/missions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  sandbox: () => request<T.SandboxStatus>('/api/sandbox'),
+  sandboxDo: (op: 'start' | 'stop' | 'reset' | 'build' | 'network/close') => request<unknown>(`/api/sandbox/${op}`, { method: 'POST' }),
+  sandboxSettings: (computer_use: boolean) => request<T.SandboxStatus>('/api/sandbox/settings', { json: { computer_use } }),
+  sandboxHistory: (limit = 80) => request<T.SandboxRun[]>(`/api/sandbox/history${q({ limit })}`),
+  skills: () => request<T.Skill[]>('/api/skills'),
+  installSkill: (folder: string) => request<T.Skill>('/api/skills/install', { json: { folder } }),
+  skillEnabled: (name: string, enabled: boolean) => request<T.Skill[]>(`/api/skills/${encodeURIComponent(name)}/enabled`, { json: { enabled } }),
+  removeSkill: (name: string) => request<unknown>(`/api/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   createBackup: () => request<T.Backup>('/api/backups', { method: 'POST' }),
   backups: () => request<T.Backup[]>('/api/backups'),
   restorePreview: (id: string) => request<T.RestorePreview>(`/api/backups/${encodeURIComponent(id)}/restore-preview`, { method: 'POST' }),

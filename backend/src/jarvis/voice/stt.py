@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import math
+import re
 import os
 import platform
 import threading
@@ -29,6 +30,28 @@ MODEL_SIZES_MB = {"tiny.en": 75, "base.en": 142, "small.en": 484, "medium.en": 1
 # Biases local transcription toward AJ's vocabulary (names, courses, apps). Plain text; never sent anywhere.
 VOCAB_PROMPT = ("Jarvis, Todoist, Google Calendar, IS 640, MSC 550, IS 401, IS 501, MKT 601, GTA, iFlex, Rumble, "
                 "Yi Tan, DJ Hovermale, CCM, Monk Mode, AI GURU.")
+
+
+# Whisper sometimes "hears" subtitle credits/outros on silence or noise (artifacts of its training data).
+HALLUCINATIONS = re.compile(
+    r"(?:\bsub(?:title)?s?\s+(?:by|from)\b.*|\bsubtitles?\s+(?:by|from|provided)\b.*|\bcaptions?\s+by\b.*|"
+    r"\bamara\.org\b.*|\bwww\.[\w.-]+\.(?:co\.uk|com|org|net)\b|\bthanks? (?:you )?for watching\b.*|"
+    r"\bplease (?:like and )?subscribe\b.*|\bdon'?t forget to (?:like|subscribe)\b.*|\btranscri(?:bed|ption) by\b.*|"
+    r"\bcopyright\b.*\d{4}.*)",
+    re.IGNORECASE)
+
+
+def clean_segment(text: str, no_speech_prob: float, avg_logprob: float, compression_ratio: float) -> str:
+    """Drop hallucinated segments: the model's own 'probably not speech' signal, repetition loops, credit lines."""
+    if no_speech_prob > 0.6 and avg_logprob < -0.8:
+        return ""
+    if compression_ratio > 2.6:            # repetitive loop ("you you you …")
+        return ""
+    t = HALLUCINATIONS.sub("", text)
+    if t == text:
+        return text
+    t = re.sub(r"\s{2,}", " ", t).strip(" ,-")
+    return t if re.search(r"[A-Za-z0-9]", t) else ""
 
 
 class AudioError(Exception):
@@ -198,8 +221,15 @@ class WhisperEngine:
         segs = []
         word_probs: list[float] = []
         logprobs = []
+        dropped: list[str] = []
         for sg in segments:
-            segs.append({"start": round(sg.start, 2), "end": round(sg.end, 2), "text": sg.text.strip(),
+            kept = clean_segment(sg.text.strip(), sg.no_speech_prob, sg.avg_logprob, getattr(sg, "compression_ratio", 1.0))
+            if not kept:
+                dropped.append(sg.text.strip())
+                continue
+            if kept != sg.text.strip():
+                dropped.append(sg.text.strip())
+            segs.append({"start": round(sg.start, 2), "end": round(sg.end, 2), "text": kept,
                          "avg_logprob": sg.avg_logprob, "no_speech_prob": sg.no_speech_prob})
             logprobs.append(sg.avg_logprob)
             word_probs += [w.probability for w in (sg.words or [])]

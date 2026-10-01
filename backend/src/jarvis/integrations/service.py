@@ -83,12 +83,18 @@ def todoist_sync(conn) -> dict:
 
 
 # ------------------------------------------------------------------ Google OAuth
+GOOGLE_PURPOSES = ("calendar", "drive", "gmail")
+GMAIL_SCOPES = ["openid", "email", "https://www.googleapis.com/auth/gmail.readonly",
+                "https://www.googleapis.com/auth/gmail.compose"]
+
+
 def google_setup_info() -> dict:
     from jarvis.integrations.google_oauth import CALENDAR_SCOPES, DRIVE_FILE_SCOPES, DRIVE_SCOPES
     s = get_settings()
     return {"configured": bool(s.google_client_id and s.google_client_secret), "redirect_uri": redirect_uri(),
-            "required_apis": ["Google Calendar API", "Google Drive API (only if using Drive)"],
-            "scopes": {"calendar": CALENDAR_SCOPES, "drive": DRIVE_SCOPES, "drive_per_file_alternative": DRIVE_FILE_SCOPES},
+            "required_apis": ["Google Calendar API", "Google Drive API (only if using Drive)", "Gmail API (only if using Gmail)"],
+            "scopes": {"calendar": CALENDAR_SCOPES, "drive": DRIVE_SCOPES, "gmail": GMAIL_SCOPES,
+                       "drive_per_file_alternative": DRIVE_FILE_SCOPES},
             "steps": [
                 "Google Cloud Console → create a project (personal account; no Workspace admin / domain-wide delegation).",
                 "APIs & Services → enable Google Calendar API (and Drive API if wanted).",
@@ -113,8 +119,8 @@ def google_start(conn, purpose: str) -> tuple[str, str]:
     s = get_settings()
     if not (s.google_client_id and s.google_client_secret):
         raise SetupError("not_configured", "Google OAuth client isn't configured; follow the setup steps first.")
-    if purpose not in ("calendar", "drive"):
-        raise SetupError("bad_purpose", "purpose must be calendar or drive")
+    if purpose not in GOOGLE_PURPOSES:
+        raise SetupError("bad_purpose", f"purpose must be one of {', '.join(GOOGLE_PURPOSES)}")
     state = pysecrets.token_urlsafe(32)
     verifier, challenge = generate_pkce_pair()
     binding = pysecrets.token_urlsafe(32)
@@ -123,7 +129,7 @@ def google_start(conn, purpose: str) -> tuple[str, str]:
                  "binding_hash) VALUES (?,?,?,?,?,?,?,?)",
                  (hashlib.sha256(state.encode()).hexdigest(), "google", purpose, verifier, ru, now_iso(),
                   iso(utcnow() + timedelta(minutes=10)), hashlib.sha256(binding.encode()).hexdigest()))
-    scopes = CALENDAR_SCOPES if purpose == "calendar" else DRIVE_SCOPES
+    scopes = {"calendar": CALENDAR_SCOPES, "drive": DRIVE_SCOPES, "gmail": GMAIL_SCOPES}[purpose]
     return build_auth_url(s.google_client_id, ru, scopes, state, challenge), binding
 
 
@@ -324,6 +330,93 @@ def connect_anthropic(conn, key: str) -> dict:
     return integration_view(conn, aid) | {"note": "Key stored encrypted. No test call is made until you enable a budget."}
 
 
+# ------------------------------------------------------------------ Microsoft (Outlook mail)
+def microsoft_redirect_uri() -> str:
+    return redirect_uri().replace("/google/callback", "/microsoft/callback")
+
+
+def microsoft_setup_info() -> dict:
+    from jarvis.integrations.microsoft import MAIL_SCOPES, SEND_SCOPE
+    s = get_settings()
+    return {"configured": bool(s.microsoft_client_id and s.microsoft_client_secret), "redirect_uri": microsoft_redirect_uri(),
+            "tenant": s.microsoft_tenant, "scopes": MAIL_SCOPES, "send_scope_added_when_enabled": SEND_SCOPE,
+            "steps": [
+                "Azure portal → Microsoft Entra ID → App registrations → New registration.",
+                "Supported account types: 'Accounts in any organizational directory and personal Microsoft accounts'.",
+                "Redirect URI: platform Web, exactly: " + microsoft_redirect_uri(),
+                "Certificates & secrets → New client secret; copy the value.",
+                "API permissions → Microsoft Graph → Delegated: User.Read, Mail.ReadWrite, offline_access (Mail.Send only "
+                "if you'll enable sending).",
+                "Put JARVIS_MICROSOFT_CLIENT_ID and JARVIS_MICROSOFT_CLIENT_SECRET in .env (never commit), restart, Connect.",
+            ]}
+
+
+def microsoft_start(conn, purpose: str = "mail", with_send: bool = False) -> tuple[str, str]:
+    from jarvis.integrations.google_oauth import generate_pkce_pair
+    from jarvis.integrations.microsoft import MAIL_SCOPES, SEND_SCOPE, build_auth_url
+    s = get_settings()
+    if not (s.microsoft_client_id and s.microsoft_client_secret):
+        raise SetupError("not_configured", "Microsoft OAuth client isn't configured; follow the setup steps first.")
+    if purpose != "mail":
+        raise SetupError("bad_purpose", "purpose must be mail")
+    state = pysecrets.token_urlsafe(32)
+    verifier, challenge = generate_pkce_pair()
+    binding = pysecrets.token_urlsafe(32)
+    ru = microsoft_redirect_uri()
+    conn.execute("INSERT INTO oauth_states (state_hash, provider, purpose, code_verifier, redirect_uri, created_at, expires_at, "
+                 "binding_hash) VALUES (?,?,?,?,?,?,?,?)",
+                 (hashlib.sha256(state.encode()).hexdigest(), "microsoft", purpose + ("+send" if with_send else ""), verifier,
+                  ru, now_iso(), iso(utcnow() + timedelta(minutes=10)), hashlib.sha256(binding.encode()).hexdigest()))
+    scopes = MAIL_SCOPES + ([SEND_SCOPE] if with_send else [])
+    return build_auth_url(s.microsoft_tenant, s.microsoft_client_id, ru, scopes, state, challenge), binding
+
+
+def microsoft_callback(conn, state: str, code: str | None, error: str | None, binding: str | None) -> dict:
+    import hmac
+
+    from jarvis.integrations.microsoft import MAIL_SCOPES, SEND_SCOPE, exchange_code, fetch_me
+    h = hashlib.sha256((state or "").encode()).hexdigest()
+    st = row(conn, "SELECT * FROM oauth_states WHERE state_hash=?", (h,))
+    if not st or st["used_at"] or parse_iso(st["expires_at"]) < utcnow() or st["provider"] != "microsoft":
+        raise SetupError("bad_state", "OAuth state is invalid, reused or expired. Start the connection again.")
+    if not binding or not st["binding_hash"] or not hmac.compare_digest(
+            hashlib.sha256(binding.encode()).hexdigest(), st["binding_hash"]):
+        raise SetupError("wrong_browser", "Finish the connection in the same browser where you clicked Connect.")
+    conn.execute("UPDATE oauth_states SET used_at=? WHERE state_hash=?", (now_iso(), h))
+    if error or not code:
+        raise SetupError("denied", f"Microsoft returned: {error or 'no code'}")
+    s = get_settings()
+    scopes = MAIL_SCOPES + ([SEND_SCOPE] if st["purpose"].endswith("+send") else [])
+    try:
+        tokens = exchange_code(s.microsoft_tenant, s.microsoft_client_id, s.microsoft_client_secret, st["redirect_uri"],
+                               code, st["code_verifier"], scopes)
+        me = fetch_me(tokens["access_token"])
+    except ProviderError as e:
+        raise SetupError("token_exchange_failed", f"Microsoft token exchange failed ({e.kind}).") from e
+    aid = A.upsert_account(conn, "microsoft", me["email"] or "Microsoft account", json.dumps(tokens), "oauth_tokens",
+                           external_account_id=me["email"], scopes=(tokens.get("scope") or "").split(),
+                           config={"purposes": ["mail"]})
+    return integration_view(conn, aid)
+
+
+def set_mail_sending(conn, box: str, enabled: bool) -> dict:
+    """AJ turns sending on/off for one mailbox. On = a `mail_send` write grant (the executor requires it for every send,
+    each of which still needs his explicit approval). Outlook additionally needs the Mail.Send consent."""
+    if box not in A.MAILBOXES:
+        raise SetupError("bad_mailbox", "mailbox must be gmail or outlook")
+    acct = A.mail_account(conn, box)
+    if not acct:
+        raise SetupError("not_connected", f"Connect {box} first.")
+    if enabled and box == "outlook" and "Mail.Send" not in " ".join(acct["scopes"]):
+        raise SetupError("needs_consent", "Reconnect Outlook with sending allowed (Microsoft needs the Mail.Send consent).")
+    with tx(conn):
+        A.set_grants(conn, acct["id"], "mail_send", "write",
+                     [(acct["external_account_id"], acct["external_account_id"])] if enabled else [])
+        audit(conn, "user", "mail.sending_" + ("enabled" if enabled else "disabled"), f"{box} sending "
+              + ("enabled (every send still needs your approval)" if enabled else "disabled"), "integration_account", acct["id"])
+    return integration_view(conn, acct["id"])
+
+
 # ------------------------------------------------------------------ views
 def integration_view(conn, account_id: str) -> dict:
     a = A.get_account_by_id(conn, account_id)
@@ -343,7 +436,7 @@ def list_integrations(conn) -> list[dict]:
                                                               "ORDER BY provider")]
     present = {o["provider"] for o in out}
     s = get_settings()
-    for p in ("todoist", "google", "ics", "github", "anthropic"):
+    for p in ("todoist", "google", "microsoft", "ics", "github", "anthropic"):
         if p not in present:
             out.append({"provider": p, "account_id": None, "status": "not_connected", "label": None, "scopes": [], "grants": [],
                         "last_sync_at": None, "last_error": None, "live_verified": False,

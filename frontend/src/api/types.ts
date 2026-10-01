@@ -228,6 +228,10 @@ export interface ActionHistoryEntry {
   approved_at: ISODate | null;
   receipt: Receipt | null;
   attempts: { at?: ISODate; state?: string; error?: string | null; [k: string]: unknown }[];
+  action_id?: string;
+  auto_approved?: boolean;
+  undo_until?: ISODate | null;
+  undone_by?: string | null;
   [k: string]: unknown;
 }
 
@@ -449,7 +453,7 @@ export interface GoogleSetup {
   configured: boolean;
   redirect_uri: string;
   required_apis: string[];
-  scopes: { calendar: string[]; drive: string[] };
+  scopes: { calendar: string[]; drive: string[]; gmail?: string[] };
 }
 export interface GoogleCalendar {
   id: string;
@@ -499,6 +503,7 @@ export interface ActivityEvent {
   kind: string;
   message: string;
   run_id?: string;
+  actor?: string;
   entity_type?: string;
   entity_id?: string;
 }
@@ -521,4 +526,249 @@ export interface CourseMapping {
   course?: string;
   project_id?: string;
   [k: string]: unknown;
+}
+
+// ---------------------------------------------------------------- V4: email
+export type Mailbox = 'gmail' | 'outlook';
+export type MailCategory = 'needs_reply' | 'waiting' | 'fyi' | 'bulk';
+export interface MailItem {
+  ref: string;
+  mailbox: Mailbox;
+  category: MailCategory;
+  from_name: string;
+  sender_email: string;
+  subject: string;
+  snippet: string;
+  date: ISODate | null;
+  unread: boolean;
+  important?: boolean;
+  web_url: string | null;
+}
+export interface InboxResponse {
+  items: MailItem[];
+  counts: Record<MailCategory, number>;
+  sources: Record<string, { status: string; count?: number; simulated?: boolean; detail?: string }>;
+  mailboxes: Record<Mailbox, { status: string; address: string | null }>;
+}
+export interface MailThread {
+  mailbox: Mailbox;
+  thread_ref: string;
+  subject: string;
+  messages: { ref: string; from: string; to: string[]; cc: string[]; date: ISODate | null; text: string }[];
+  note: string;
+}
+export interface MicrosoftSetup {
+  configured: boolean;
+  redirect_uri: string;
+  tenant: string;
+  scopes: string[];
+  send_scope_added_when_enabled: string;
+  steps: string[];
+}
+
+export interface VaultStatus {
+  indexed_roots: string[];
+  last_index: Record<string, { at: ISODate; new_or_changed: number; unchanged: number; removed: number; skipped: number; failed: number }>;
+}
+
+// ---------------------------------------------------------------- V4: app connectors
+export interface Connector {
+  id: string;
+  name: string;
+  family: string;
+  auth: 'token' | 'oauth';
+  summary: string;
+  reads: string[];
+  writes: string[];
+  fields: { key: string; label: string; secret: boolean; placeholder: string }[];
+  steps: string[];
+  status: string;
+  simulated: boolean;
+  account: Integration | null;
+  resource: { type: string; label: string; access: ('read' | 'write')[] } | null;
+  oauth?: { configured: boolean; redirect_uri: string };
+}
+export interface ConnectorResources {
+  type: string;
+  label: string;
+  access: ('read' | 'write')[];
+  items: { id: string; name: string; detail?: string; read?: boolean; write?: boolean }[];
+}
+
+// ---------------------------------------------------------------- V4: MCP
+export type McpMode = 'off' | 'read' | 'propose';
+export interface McpTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  annotations: { read_only: boolean; destructive: boolean; idempotent: boolean };
+  mode: McpMode;
+  tier: 1 | 2;
+}
+export interface McpServer {
+  id: string;
+  name: string;
+  transport: 'stdio' | 'http';
+  command: string | null;
+  args: string[];
+  url: string | null;
+  has_secret: boolean;
+  status: 'pending_review' | 'active' | 'changed' | 'error' | 'disabled';
+  simulated: boolean;
+  last_error: string | null;
+  reviewed_at: string | null;
+  pinned_hash: string | null;
+  discovered_hash: string | null;
+  tools: McpTool[];
+}
+
+export interface TelegramStatus {
+  status: 'not_connected' | 'connected' | 'paired';
+  bot?: string;
+  chat_name?: string | null;
+  account_id?: string;
+  notify?: boolean;
+  simulated?: boolean;
+}
+
+// ---------------------------------------------------------------- V4: Today, Help, Policies, Missions, Workbench
+export interface HeadsUpCard {
+  kind: 'approvals' | 'leave_by' | 'conflict' | 'deadlines' | 'email' | 'mission';
+  tone: 'attention' | 'warn' | 'info';
+  title: string;
+  detail: string;
+  link: string;
+}
+export interface WeeklyReport {
+  commands: number;
+  actions_done: number;
+  auto_approved: number;
+  mission_runs: number;
+  spend_usd: number;
+  minutes_saved_estimate: number;
+  estimate_basis: string;
+}
+export interface ManualTool {
+  name: string;
+  what: string;
+  example: string;
+  risk: string;
+}
+export interface ActionCatalogItem {
+  action_type: string;
+  label: string;
+  provider: string;
+  tier: 1 | 2 | 3;
+  automatable: boolean;
+  undo: string | null;
+  reaches_others: boolean;
+}
+export interface Manual {
+  assistant_name: string;
+  guides: { id: string; title: string; markdown: string }[];
+  reference: {
+    capabilities: { family: string; label: string; tools: ManualTool[] }[];
+    actions: ActionCatalogItem[];
+    connectors: { id: string; name: string; summary: string; reads: string[]; writes: string[]; status: string }[];
+  };
+}
+export interface ManualHit {
+  guide: string;
+  id: string;
+  text: string;
+}
+export interface PolicyRule {
+  id: string;
+  action_type: string;
+  action_label: string;
+  label: string;
+  match: Record<string, unknown>;
+  origins: string[];
+  daily_cap: number;
+  used_24h: number;
+  created_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  active: boolean;
+}
+export interface PoliciesResponse {
+  rules: PolicyRule[];
+  catalog: ActionCatalogItem[];
+  undo_window_minutes: number;
+}
+export interface MissionSchedule {
+  kind: 'daily' | 'weekly' | 'interval';
+  at?: string;
+  days?: number[];
+  minutes?: number;
+}
+export interface MissionRun {
+  id: string;
+  run_id: string | null;
+  started_at: string;
+  finished_at: string | null;
+  status: 'running' | 'done' | 'nothing_new' | 'failed' | 'skipped_budget';
+  summary: string | null;
+  cost_usd: number;
+  proposal_id: string | null;
+}
+export interface Mission {
+  id: string;
+  name: string;
+  goal: string;
+  schedule: MissionSchedule;
+  tz: string;
+  families: string[];
+  allow_proposals: boolean;
+  output: 'notify' | 'quiet';
+  max_cost_usd: number;
+  monthly_cost_usd: number;
+  month_spend: number;
+  quiet_start: string | null;
+  quiet_end: string | null;
+  enabled: boolean;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_status: string | null;
+  last_summary: string | null;
+  runs: MissionRun[];
+}
+export interface MissionTemplate extends Partial<Mission> {
+  key: string;
+}
+export interface MissionsResponse {
+  missions: Mission[];
+  templates: MissionTemplate[];
+  families: string[];
+  read_only_families: string[];
+}
+export interface SandboxStatus {
+  runtime: string;
+  available: boolean;
+  detail: string;
+  image?: boolean;
+  running?: boolean;
+  proxy?: boolean;
+  simulated: boolean;
+  network: { active: boolean; domains: string[]; until: string | null };
+  latest_shot: string | null;
+  computer_use?: boolean;
+}
+export interface SandboxRun {
+  id: string;
+  run_id: string | null;
+  kind: string;
+  detail: string;
+  exit_code: number | null;
+  output: string | null;
+  duration_ms: number | null;
+  created_at: string;
+}
+export interface Skill {
+  name: string;
+  title: string;
+  description: string;
+  enabled: boolean;
+  files: string[];
+  chars: number;
 }

@@ -46,7 +46,44 @@ export interface SlotsVisual {
   minutes: number;
   slots: { start: string; end: string }[];
 }
-export type Visual = CalendarVisual | WeatherVisual | TasksVisual | SlotsVisual;
+export interface InboxVisual {
+  type: 'inbox';
+  counts: Record<string, number>;
+  messages: {
+    ref: string;
+    mailbox: string;
+    category: 'needs_reply' | 'waiting' | 'fyi' | 'bulk';
+    from_name: string;
+    subject: string;
+    snippet: string;
+    date: string | null;
+    unread: boolean;
+    web_url: string | null;
+  }[];
+}
+export interface ScreenshotVisual {
+  type: 'screenshot';
+  shot_id: string;
+  title?: string | null;
+  url?: string | null;
+}
+export type Visual = CalendarVisual | WeatherVisual | TasksVisual | SlotsVisual | InboxVisual | ScreenshotVisual;
+
+export const MAIL_CATEGORY: Record<string, string> = {
+  needs_reply: 'Needs reply',
+  waiting: 'Waiting',
+  fyi: 'FYI',
+  bulk: 'Bulk',
+};
+
+export function relTime(iso: string | null): string {
+  if (!iso) return '';
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return 'now';
+  if (mins < 60) return `${mins}m`;
+  if (mins < 60 * 24) return `${Math.round(mins / 60)}h`;
+  return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
 
 const hm = (iso: string) => {
   const d = new Date(iso);
@@ -288,9 +325,36 @@ export function SlotsCard({ v }: { v: SlotsVisual }) {
   );
 }
 
+export function InboxCard({ v }: { v: InboxVisual }) {
+  const needs = v.counts.needs_reply ?? 0;
+  return (
+    <div className="viz viz-inbox" data-testid="viz-inbox">
+      <div className="viz-head">
+        Inbox{' '}
+        <span className="muted small">
+          {needs ? `${needs} need${needs === 1 ? 's' : ''} a reply` : 'nothing waiting on you'}
+        </span>
+      </div>
+      <ul>
+        {v.messages
+          .filter((m) => m.category !== 'bulk')
+          .slice(0, 6)
+          .map((m) => (
+            <li key={m.ref} className={`cat-${m.category}${m.unread ? ' unread' : ''}`}>
+              <span className="who">{m.from_name}</span>
+              <span className="subj">{m.subject}</span>
+              <span className={`tag tag-${m.category}`}>{MAIL_CATEGORY[m.category]}</span>
+              <span className="when mono">{relTime(m.date)}</span>
+            </li>
+          ))}
+      </ul>
+    </div>
+  );
+}
+
 export function Visuals({ items }: { items?: Visual[] | null }) {
   if (!items?.length) return null;
-  const order = { weather: 0, calendar: 1, slots: 2, tasks: 3 } as Record<string, number>;
+  const order = { weather: 0, calendar: 1, slots: 2, inbox: 3, tasks: 4 } as Record<string, number>;
   return (
     <div className="viz-wrap">
       {[...items]
@@ -304,6 +368,15 @@ export function Visuals({ items }: { items?: Visual[] | null }) {
             <TasksCard key={i} v={v} />
           ) : v.type === 'slots' ? (
             <SlotsCard key={i} v={v} />
+          ) : v.type === 'inbox' ? (
+            <InboxCard key={i} v={v} />
+          ) : v.type === 'screenshot' ? (
+            <figure key={i} className="viz viz-shot">
+              <div className="viz-head">
+                {v.title || 'Sandbox browser'} {v.url && <span className="muted small">{v.url}</span>}
+              </div>
+              <img src={`/api/sandbox/shots/${v.shot_id}`} alt={`Screenshot of ${v.title || v.url || 'the page'}`} />
+            </figure>
           ) : null,
         )}
     </div>

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
+import { HeadsUp, WeeklyReport } from '../components/HeadsUp';
 import type { Plan, Task, Today } from '../api/types';
 import { Async, Card, Empty, ErrorBox, SourceBadge } from '../components/ui';
 import { fmtDate, fmtRelative, fmtTime, humanValue, localTz, textOf } from '../lib/format';
@@ -171,6 +172,7 @@ export function TodayPage() {
         {(t: Today) => (
           <>
             <TodayHero t={t} />
+            <HeadsUp />
             <div className="sources" aria-label="Source status">
               {Object.keys(t.sources).length === 0 ? (
                 <span className="warn-text">No source status reported.</span>
@@ -179,6 +181,7 @@ export function TodayPage() {
               )}
             </div>
             <TodayWeather />
+            <WeeklyReport />
             <div className="grid-2">
               <PlanEditor plan={t.plan} onSaved={(p) => today.setData((d) => (d ? { ...d, plan: p } : d))} />
               <QuickCapture />

@@ -3,17 +3,31 @@ import { api } from '../api/client';
 import { NavLink, Link } from 'react-router-dom';
 import { useControl, useNotifications, useSpeech } from '../state/app';
 import { BellIcon, PauseIcon, PlayIcon } from './icons';
+import { CommandPalette } from './CommandPalette';
 
 export const NAV = [
   { to: '/', label: 'Today', icon: '◐', mobile: true },
   { to: '/console', label: 'Command', icon: '◉', mobile: true },
+  { to: '/inbox', label: 'Inbox', icon: '✉', mobile: true },
   { to: '/actions', label: 'Actions', icon: '✓', mobile: true },
+  { to: '/missions', label: 'Missions', icon: '◎', mobile: false },
+  { to: '/workbench', label: 'Workbench', icon: '⌘', mobile: false },
+  { to: '/memory', label: 'Memory', icon: '◈', mobile: false },
   { to: '/projects', label: 'Projects', icon: '▦', mobile: false },
-  { to: '/memory', label: 'Memory', icon: '◈', mobile: true },
-  { to: '/briefings', label: 'Briefings', icon: '☰', mobile: false },
+  { to: '/connections', label: 'Connections', icon: '⇄', mobile: false },
   { to: '/activity', label: 'Activity', icon: '≋', mobile: false },
   { to: '/settings', label: 'Settings', icon: '⚙', mobile: false },
+  { to: '/help', label: 'Help', icon: '?', mobile: false },
 ] as const;
+
+/** Assistant name from the server's brand setting (one setting renames the product). */
+function useBrand(): string {
+  const [name, setName] = useState('JARVIS');
+  useEffect(() => {
+    api.brain().then((b) => b.assistant_name && setName(b.assistant_name), () => undefined);
+  }, []);
+  return name;
+}
 
 function PauseControl() {
   const { control, busy, pause, resume, error } = useControl();
@@ -126,6 +140,7 @@ function HudStatus() {
 }
 
 export function Layout({ children }: { children: ReactNode }) {
+  const brand = useBrand();
   return (
     <div className="shell">
       <a href="#main" className="skip-link">
@@ -134,7 +149,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <aside className="sidebar" aria-label="Primary">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true" />
-          JARVIS
+          {brand}
         </div>
         <nav>
           {NAV.map((n) => (
@@ -151,9 +166,10 @@ export function Layout({ children }: { children: ReactNode }) {
         <header className="topbar">
           <div className="brand brand-mobile">
             <span className="brand-mark" aria-hidden="true" />
-            JARVIS
+            {brand}
           </div>
           <HudStatus />
+          <CommandPalette />
           <div className="topbar-right">
             <StopSpeaking />
             <PauseControl />

@@ -208,3 +208,99 @@ def github_provider(conn: sqlite3.Connection):
 
 def is_simulated(adapter: Any) -> bool:
     return bool(getattr(adapter, "simulated", False))
+
+
+# ---------- mail (Gmail rides on the Google account with purpose "gmail"; Outlook on the Microsoft account) ----------
+MAILBOXES = ("gmail", "outlook")
+_MAIL_ACCOUNT = {"gmail": ("google", "gmail"), "outlook": ("microsoft", "mail")}
+
+
+def mail_account(conn: sqlite3.Connection, box: str) -> dict | None:
+    provider, purpose = _MAIL_ACCOUNT[box]
+    acct = get_account(conn, provider)
+    if acct and purpose in acct["config"].get("purposes", []):
+        return acct
+    return None
+
+
+def connected_mailboxes(conn: sqlite3.Connection) -> list[str]:
+    return [b for b in MAILBOXES if b in _overrides or mail_account(conn, b)]
+
+
+def _microsoft_credentials(conn: sqlite3.Connection, acct: dict):
+    from jarvis.integrations.microsoft import MicrosoftCredentials
+    s = get_settings()
+    if not (s.microsoft_client_id and s.microsoft_client_secret):
+        raise NotConnected("outlook", "Microsoft OAuth client is not configured (JARVIS_MICROSOFT_CLIENT_ID/SECRET).")
+    tokens = json.loads(read_secret(acct) or "{}")
+    aid = acct["id"]
+
+    def updater(new_tokens: dict) -> None:
+        from jarvis.core.db import connection
+        with connection() as c2:
+            update_secret(c2, aid, json.dumps(new_tokens))
+    return MicrosoftCredentials(tokens, s.microsoft_client_id, s.microsoft_client_secret, s.microsoft_tenant,
+                                token_updater=updater)
+
+
+def mail_provider(conn: sqlite3.Connection, box: str):
+    if box in _overrides:
+        return _overrides[box]
+    acct = mail_account(conn, box)
+    if not acct or acct["status"] not in ("connected", "error"):
+        raise NotConnected(box, "Connect it in Settings → Integrations.")
+    if box == "gmail":
+        from jarvis.integrations.gmail import GmailAdapter
+        return GmailAdapter(_google_credentials(conn, acct))
+    from jarvis.integrations.microsoft import OutlookAdapter
+    return OutlookAdapter(_microsoft_credentials(conn, acct))
+
+
+# ---------- V4 app connectors (Notion, Slack, Canvas, Spotify, Home Assistant, routing, SimpleFIN) ----------
+APP_PROVIDERS = ("notion", "slack", "canvas", "spotify", "homeassistant", "routing", "simplefin")
+
+
+def app_provider(conn: sqlite3.Connection, provider: str):
+    if provider in _overrides:
+        return _overrides[provider]
+    acct = get_account(conn, provider)
+    if not acct or acct["status"] not in ("connected", "error"):
+        raise NotConnected(provider, "Connect it in Settings → Integrations.")
+    secret, cfg = read_secret(acct), acct["config"]
+    if provider == "notion":
+        from jarvis.integrations.notion import NotionAdapter
+        return NotionAdapter(secret)
+    if provider == "slack":
+        from jarvis.integrations.slack import SlackAdapter
+        return SlackAdapter(secret)
+    if provider == "canvas":
+        from jarvis.integrations.canvas import CanvasAdapter
+        return CanvasAdapter(cfg["base_url"], secret)
+    if provider == "homeassistant":
+        from jarvis.integrations.homeassistant import HomeAssistantAdapter
+        return HomeAssistantAdapter(cfg["base_url"], secret)
+    if provider == "routing":
+        from jarvis.integrations.routing import RoutingAdapter
+        return RoutingAdapter(secret)
+    if provider == "simplefin":
+        from jarvis.integrations.simplefin import SimpleFinAdapter
+        return SimpleFinAdapter(secret)
+    if provider == "spotify":
+        from jarvis.integrations.spotify import SpotifyAdapter, SpotifyCredentials
+        s = get_settings()
+        aid = acct["id"]
+
+        def updater(new_tokens: dict) -> None:
+            from jarvis.core.db import connection
+            with connection() as c2:
+                update_secret(c2, aid, json.dumps(new_tokens))
+        return SpotifyAdapter(SpotifyCredentials(json.loads(secret or "{}"), s.spotify_client_id or "",
+                                                 token_updater=updater))
+    raise NotConnected(provider, "Unknown provider.")
+
+
+def app_connected(conn: sqlite3.Connection, provider: str) -> bool:
+    if provider in _overrides:
+        return True
+    acct = get_account(conn, provider)
+    return bool(acct and acct["status"] in ("connected", "error"))

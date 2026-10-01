@@ -79,9 +79,11 @@ def create_app() -> FastAPI:
             resp.headers["Cache-Control"] = "no-store"
         return resp
 
-    from jarvis.api import routes
+    from jarvis.api import routes, v4
     app.include_router(routes.public)
+    app.include_router(v4.public)
     app.include_router(routes.router, dependencies=[Depends(require_session)])
+    app.include_router(v4.router, dependencies=[Depends(require_session)])
 
     dist = REPO_ROOT / "frontend" / "dist"
     if dist.exists():

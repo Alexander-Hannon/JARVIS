@@ -1,5 +1,108 @@
 # BUILD_STATUS
 
+## Session 7 update (2026-10-01): JARVIS V4 — M0 foundations
+Plan approved by AJ: V4 "Operator" (native sandboxed OpenClaw-style powers, all four integration families, MCP client,
+tiered autonomy). Milestones M0 → M4; this session landed **M0**.
+- **Tool registry** (`agents/tools/`): every agent tool is a registered `Tool` (schema, risk `read|propose|act`, family,
+  availability, Help text, example phrase). The 20 V2 tools moved over unchanged; dispatch no longer uses `getattr`.
+  Deferred tools are sent with `defer_loading` behind `tool_search_tool_bm25_20251119`.
+- **Action-type registry** (`actions/registry.py`): replaces `ALLOWED_ACTIONS` + `HANDLERS`. Each type declares provider,
+  handler, tier (T1/T2/T3), idempotency, account + grant needed, and undo inverse. `register()` refuses T1 for anything
+  that reaches other people.
+- **Tiered autonomy** (`actions/policy.py`, migration `0003_v4_autonomy.sql`): AJ-authored rules (UI/API only) can
+  auto-approve T1 actions — all-or-nothing per proposal, origin-scoped (AJ's own commands by default), 24 h caps,
+  revocable. Auto-approvals are normal approvals (`channel='policy'`) so every executor guard still runs. 5-minute
+  **Undo** for reversible auto-approved actions. Audit actor `policy`.
+- **Live run streaming:** `GET /api/runs/{id}` and SSE `GET /api/runs/{id}/stream`; the UI uses EventSource and falls
+  back to polling.
+- **Brand setting:** `settings.brand.assistant_name` drives the agent persona name (commercial rename = one setting).
+- **Docs:** CLAUDE.md safety section rewritten for tiers/registry; ARCHITECTURE.md V2 numbers fixed + V4 autonomy;
+  API_CONTRACT adds policies, undo, runs, `/api/weather`, `visuals`.
+- **Migration check:** `0003` applied to a *copy* of the real `data/jarvis.db`: row counts preserved (approvals 6,
+  audit 100, proposals 12), `integrity_check` ok, no FK violations. The real DB is migrated on next `serve`/`worker` start.
+- **Tests:** backend 253 passed (12 new V4: rule tiers, no-rule manual path, auto-approve → execute → undo, undo expiry,
+  all-or-nothing + caps, target match, origin scoping + pause, revocation, registry invariants, tool search, SSE);
+  ruff clean; frontend typecheck + build pass; UI (mocked) 15 passed.
+- **Environment note:** this host lacks `libasound.so.2` for Playwright's Chromium; tests ran with the library extracted
+  (not installed) into the session scratchpad via `LD_LIBRARY_PATH`. On your machine: `sudo npx playwright install-deps chromium`.
+- **Still AJ's decision:** opting into server-side refusal `fallbacks` (fallback-model pricing may sit outside the local
+  ledger) — left off.
+- **M1 · Email (Gmail + Outlook):**
+  - Adapters: `integrations/gmail.py` (REST over GoogleCredentials; `gmail.readonly` + `gmail.compose`, new Google
+    purpose `gmail`) and `integrations/microsoft.py` (Microsoft identity auth-code + PKCE, tenant `common` so
+    outlook.com works; Graph mail with `Mail.ReadWrite`; `Mail.Send` only when AJ reconnects with sending allowed).
+  - Drafts are reconciled by a hidden marker (Gmail `X-Jarvis-Op` MIME header, Outlook single-value extended
+    property), never by text in the visible body. Lost responses reconcile without duplicate drafts.
+  - Action types per mailbox: `<box>.draft.create` (T1, undo = delete draft), `<box>.draft.delete` (T2),
+    `<box>.send` (T2, `reaches_others`, idempotency `none`, needs a `mail_send` write grant that only exists while AJ
+    has sending enabled; an unclear send is never re-sent: draft gone → treated as sent, draft present → AJ decides).
+  - Agent tools (deferred behind tool search): `check_inbox` (deterministic triage: needs_reply/waiting/fyi/bulk),
+    `search_email`, `read_email`, `propose_email_draft`, `propose_send_draft`. Rail in code: draft recipients must be
+    in AJ's own words or on the thread he asked to reply to (blocks injected "send to attacker" addresses).
+  - API: `/api/inbox`, `/api/inbox/thread`, Microsoft setup/start/callback, `/api/integrations/mail/sending`.
+  - UI: Email card in Settings → Integrations (connect Gmail/Outlook, sending toggle with confirmation), inbox visual
+    card in replies, letter-style email preview on approval cards (send items flagged "can't be unsent"; recipients
+    not editable).
+  - Not live-verified: needs AJ's Gmail API enablement / Azure app registration (see Blockers).
+- **Tests:** backend 274 passed (+21: 12 mail flows incl. reconcile/no-resend/grant revocation/undo, 9 respx adapter
+  tests); UI (mocked) 15 passed.
+- **M1 · Vault indexing:** opt-in per workspace root ("Index into search"); worker re-indexes every 30 min; hidden
+  folders (`.obsidian`) and secret-looking files skipped; deleted notes, disabled roots and removed roots are forgotten.
+- **M1 · App connectors** (`integrations/connectors.py` catalog → Settings "Apps" card renders from it):
+  | App | Reads | Proposes (tier) | Rails in code |
+  |---|---|---|---|
+  | Notion (integration secret) | search, read page | page.create (T1), page.append (T1) | only under pages AJ grants; duplicate title refused; create reconciled by title |
+  | Slack (user token) | mentions, search | post_self (T1), post (T2, reaches others) | channel must be named by AJ *and* granted; hidden message metadata reconciles posts |
+  | Canvas (token, read-only) | courses, to-dos, upcoming, announcements | — | SSRF-guarded base URL; pagination never leaves the host |
+  | Spotify (OAuth PKCE, 127.0.0.1 redirect) | now playing, search | play/pause (T1), next/queue (T1, never repeated on unclear outcome) | no-device → clear failure |
+  | Home Assistant (LAN URL + token) | allowlisted states | home.control (T1), home.secure (T2) | tier derived from entity domain in the proposal *and* re-derived by the executor; control requires visibility; metadata/link-local URLs refused |
+  | OpenRouteService | travel time | — | lon/lat order verified |
+  | SimpleFIN (setup token → access URL) | balances, transactions, unusual charges | — | read-only protocol; credentialed URL never logged/chained |
+- **Tests:** backend 295 passed (+21: 11 connector flows incl. injected-destination refusals and forged-tier block,
+  8 respx adapter tests, 2 vault); UI (mocked) 15 passed.
+- **M2 · MCP client hub** (`integrations/mcp_hub.py`, official `mcp` SDK 2.2; migration `0004_v4_mcp.sql`):
+  - Servers added only in the UI (Settings → Integrations → MCP servers): streamable HTTP (https, or http on loopback)
+    with optional bearer, or a local stdio command (no shell syntax; env stored encrypted).
+  - Every tool is off until AJ reviews it: `read` (only if the server marks it read-only; runs directly, output
+    labeled untrusted) or `propose` (approval card). Proposals use `mcp.call` (T2) or `mcp.call.auto` (T1) — T1 is
+    refused for destructive tools, and the handler re-checks the current review at execution time.
+  - Tool definitions are hash-pinned at review. Hourly re-discovery and every call (list + call in one session) compare
+    the hash; a change disables the server until AJ reviews again (rug-pull defense, tested).
+  - Dynamic tools are built per request as `mcp__<server>__<tool>`, deferred behind tool search.
+  - Not used: the Messages API server-side MCP connector (it would bypass the executor and approvals).
+- **Tests:** backend 302 passed (+7 MCP incl. a real stdio subprocess server); UI (mocked) 15 passed.
+- **M3 · Missions:** scheduled background agent runs (daily/weekly/interval, DST-safe), scoped tools, proposals only
+  if allowed (origin `mission`), per-run + monthly caps, quiet hours, quiet output (`NOTHING_NEW`), templates, history.
+- **M3 · Telegram:** outbound polling, one-time pairing code, single chat, approve/reject buttons bound to version +
+  hash, local STT for voice notes, forwards saved as untrusted notes, notification mirroring.
+- **M3 · Sandbox:** Docker image + egress allowlist proxy (`backend/sandbox/`), hardened `docker run`, tools for
+  shell/files/browser, network windows (`sandbox.network`, T2), export via `file.write`, computer toolset on the
+  sandbox display.
+  **Live-verified 2026-10-01** (Docker Desktop 29.1.3 via WSL integration; image `jarvis-sandbox:1` built):
+  runs as uid 1000 with all capability sets zero; root filesystem read-only; no docker socket or host mounts;
+  internet closed by default (proxy 403, direct connections refused); approved window to pypi.org → 200 while
+  example.com and the lookalike pypi.org.evil.com stay 403; closing the window cuts access immediately; headless
+  browse of example.com returned title/text/screenshot; on the Xvfb desktop a headful Chromium was screenshotted and
+  driven with mouse_move, cursor_position, left_click, type, key, scroll and zoom.
+  **Bug found live and fixed:** exec output is clipped at 20k chars for the model, which cut base64 screenshots and
+  would have silently truncated larger exported files. Screenshots, zoom and file reads now use a binary
+  `read_bytes` path; oversize reads fail loudly (regression test added).
+- **M3 · Skills:** SKILL.md folders installed by AJ, deferred `skill__` tools, helper files copied into the sandbox,
+  drafts need approval (`skill.install`, T2).
+- **M4 · Every page:** new nav (Today, Command, Inbox, Actions, Missions, Workbench, Memory, Projects, Connections,
+  Activity, Settings, Help); Ctrl-K command palette; brand name from settings; contextual "?" on page headers.
+  - Today: heads-up cards + weekly "what I did for you" line.
+  - Missions (replaces Briefings; `/briefings` redirects): today's briefing with timeline, play, "ask about today",
+    conversational nightly debrief, a 24-hour run rail, mission cards/history/templates, archive.
+  - Inbox: triage lanes, thread view, draft/summarize via Command.
+  - Actions: Rules tab (create/turn off), "approved by your rule" badge, Undo while the window is open.
+  - Workbench: sandbox screen, activity transcript, internet window, setup steps when Docker is missing, skills.
+  - Connections: all integrations (OAuth callbacks land here with a result banner). Help: searchable manual.
+  - Screenshots reviewed at 1366×900 and 390×844 (mocked data): `frontend/e2e/screenshots/v4-*.png`.
+  - Not done: merging `styles.css` + `hud.css` into one token file (deferred; V4 styles are scoped and additive).
+- **Tests:** backend 329 passed; ruff clean; frontend typecheck + build pass; UI (mocked) 15 passed (smoke covers every
+  V4 route).
+
 ## Session 6 update (2026-09-30): full speech, research headroom, UI refinement
 - **Speech cut off ~80% through:**
   - Cause: the spoken text was cut at 900 characters and the TTS endpoint capped input at 700.
@@ -150,6 +253,12 @@ Measured on this host:
 - **Deliberately not used:** vector DB, Redis, LangGraph, n8n, containers (see ARCHITECTURE.md).
 
 ## Blockers (need AJ)
+0. V4 apps (each optional): Notion integration secret, Slack user token, Canvas token, Spotify app client ID
+   (`JARVIS_SPOTIFY_CLIENT_ID`), Home Assistant long-lived token, OpenRouteService key, SimpleFIN setup token —
+   Settings → Integrations → Apps shows the exact steps for each.
+0. V4 email: enable the Gmail API on the existing Google Cloud project (and add the two Gmail scopes to the consent
+   screen); for Outlook, an Azure app registration (Settings → Integrations → Email shows the exact steps and redirect
+   URI) with `JARVIS_MICROSOFT_CLIENT_ID/SECRET` in `.env`.
 1. Todoist API token, plus a dedicated "Jarvis Test" project for live verification.
 2. A Google Cloud OAuth Web client (ID and secret in `.env`) and consent; a "Jarvis Test" calendar.
 3. Private ICS deadline-feed URL; confirm course mappings (own vs GTA).
