@@ -242,7 +242,7 @@ def _dispatch_multi(conn, inp: CommandInput, parts: list[Interpretation], reply:
         n = len(specs)
         _new_proposal(conn, inp, reply, run_id, f"{n} item{'s' if n != 1 else ''} from your request", specs,
                       "; ".join(summaries), assumptions, questions)
-    reply.spoken = " ".join(x.strip() for x in spoken if x)[:900]
+    reply.spoken = " ".join(x.strip() for x in spoken if x)
 
 
 def _agenda(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id: str) -> None:

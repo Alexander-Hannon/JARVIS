@@ -86,7 +86,7 @@ function columns(evs: CalEvent[]): { ev: CalEvent; col: number; cols: number }[]
   return out;
 }
 
-export function CalendarTimeline({ v, compact = false }: { v: CalendarVisual; compact?: boolean }) {
+export function CalendarTimeline({ v, compact = false, bare = false }: { v: CalendarVisual; compact?: boolean; bare?: boolean }) {
   if (v.status && !['ok', 'partial'].includes(v.status)) {
     return (
       <div className="viz viz-cal">
@@ -107,8 +107,8 @@ export function CalendarTimeline({ v, compact = false }: { v: CalendarVisual; co
   const today = localToday();
   const nowH = new Date().getHours() + new Date().getMinutes() / 60;
   return (
-    <div className="viz viz-cal" data-testid="viz-calendar">
-      <div className="viz-head">
+    <div className={bare ? 'viz-cal viz-bare' : 'viz viz-cal'} data-testid="viz-calendar">
+      <div className="viz-head" hidden={bare}>
         Calendar
         <span className="muted small">{v.days.length === 1 ? v.days[0].label : `${v.days[0].label} – ${v.days[v.days.length - 1].label}`}</span>
       </div>

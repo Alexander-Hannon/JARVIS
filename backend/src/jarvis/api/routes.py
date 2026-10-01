@@ -1128,6 +1128,7 @@ def brain(conn=Depends(db)):
     data = jload(row(conn, "SELECT data FROM user_settings WHERE id=1")["data"], {})
     return {"mode": "v2_agent" if ok else "offline", "reason": None if ok else why,
             "web_research": data.get("research", {}).get("web_enabled", True),
+            "max_searches": agent.search_limit(conn),
             "model": (data.get("models") or {}).get("agent") or get_settings().model_default,
             "tools": [t["name"] for t in agent.CLIENT_TOOLS],
             "notes": "Changes to Todoist/Calendar/files are always proposals you approve. Web search costs ~$0.01 per search "

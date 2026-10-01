@@ -39,7 +39,7 @@ PRESETS: dict[str, Preset] = {
     "obadiah": Preset("obadiah", "Obadiah — deep British", "en_GB-semaine-medium", 2, 1.04, True),
     "northern": Preset("northern", "Northern English male", "en_GB-northern_english_male-medium", None, 1.0, True),
 }
-MAX_CHARS = 700
+MAX_CHARS = 6000   # long replies are chunked by the client; this is only a safety bound
 # Pronunciation fixes for names the voice mangles (display text is unaffected).
 LEXICON = [(r"\bTodoist\b", "To-do-ist"), (r"\bIS[ -]?(\d{3})\b", r"I.S. \1"), (r"\bMSC[ -]?(\d{3})\b", r"M.S.C. \1"),
            (r"\bMKT[ -]?(\d{3})\b", r"marketing \1"), (r"\bGTA\b", "G.T.A."), (r"\bCCM\b", "C.C.M."),

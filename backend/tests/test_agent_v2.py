@@ -155,3 +155,16 @@ def test_prompt_injection_in_tool_result_cannot_approve(client, fakes):
     cmd(client, "search my documents for the plan")
     names = {t["name"] for t in llm.requests[0]["tools"] if "name" in t}
     assert not any(n.startswith(("approve", "execute", "delete")) for n in names)
+
+
+def test_long_answers_are_spoken_in_full_and_limits_are_generous(client, fakes):
+    """Regression: speech stopped ~80% through (spoken text cut at 900 chars; TTS capped at 700)."""
+    from jarvis.agents import agent
+    freeze(NOW)
+    long = " ".join(f"Point {i}: here is a complete sentence about your day that Jarvis should say out loud." for i in range(30))
+    set_provider(ScriptedLLM([final(long)]))
+    r = cmd(client, "give me the full rundown")
+    assert r["message"]["spoken_text"].rstrip(".").endswith("Point 29: here is a complete sentence about your day that Jarvis should say out loud")
+    assert agent.MAX_WEB_SEARCHES >= 15 and agent.MAX_TOOL_CALLS >= 30
+    client.patch("/api/settings", {"research": {"max_searches": 30}})
+    assert client.get("/api/brain").json()["max_searches"] == 30

@@ -32,10 +32,11 @@ from jarvis.llm.provider import get_provider
 from jarvis.memory import service as memory
 
 log = logging.getLogger("jarvis.agent")
-MAX_STEPS = 8
-MAX_TOOL_CALLS = 14
-MAX_SECONDS = 120
-MAX_WEB_SEARCHES = 5
+MAX_STEPS = 14
+MAX_TOOL_CALLS = 30
+MAX_SECONDS = 240
+MAX_WEB_SEARCHES = 15         # default per command; AJ can change it (Settings → Budget → JARVIS brain)
+MAX_WEB_FETCHES = 12
 
 
 # ------------------------------------------------------------------------------------------------ tool schemas
@@ -123,14 +124,19 @@ CLIENT_TOOLS: list[dict] = [
 ]
 
 
+def search_limit(conn) -> int:
+    data = jload((row(conn, "SELECT data FROM user_settings WHERE id=1") or {}).get("data"), {}) or {}
+    return max(1, min(50, int(data.get("research", {}).get("max_searches") or MAX_WEB_SEARCHES)))
+
+
 def server_tools(conn) -> list[dict]:
     data = jload((row(conn, "SELECT data FROM user_settings WHERE id=1") or {}).get("data"), {}) or {}
     if not data.get("research", {}).get("web_enabled", True):
         return []
-    return [{"type": "web_search_20260209", "name": "web_search", "max_uses": MAX_WEB_SEARCHES,
+    return [{"type": "web_search_20260209", "name": "web_search", "max_uses": search_limit(conn),
              "user_location": {"type": "approximate", "city": "Huntsville", "region": "Alabama", "country": "US",
                                "timezone": "America/Chicago"}},
-            {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 5, "max_content_tokens": 12000}]
+            {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": MAX_WEB_FETCHES, "max_content_tokens": 12000}]
 
 
 # ------------------------------------------------------------------------------------------------ system prompt
@@ -480,7 +486,7 @@ def run(conn, inp, reply, run_id: str, specialists: list[str]) -> None:
             reply.say("Stopped, as requested.")
             break
         resp = llm.agent_step(conn, system=system, messages=messages, tools=tools, max_tokens=6000, run_id=run_id,
-                              max_web_searches=MAX_WEB_SEARCHES)
+                              max_web_searches=search_limit(conn))
         content = resp["content"]
         for b in content:
             if _bt(b, "type") == "server_tool_use":
@@ -533,7 +539,7 @@ def run(conn, inp, reply, run_id: str, specialists: list[str]) -> None:
                       ar.assumptions, [])
         if blocked and not any("not connected" in x.lower() for x in blocked):
             reply.say("(Pick the Todoist project on the card below to unlock approval.)")
-    reply.spoken = final_text[:900] if final_text else None   # chief runs speechify() on it
+    reply.spoken = final_text or None   # chief runs speechify() on it
     run_event(conn, run_id, "status", f"Finished ({tool_calls} tool call(s), {web_searches} web search(es))")
 
 

@@ -1,5 +1,6 @@
 import { MessageText } from '../components/MessageText';
 import { Visuals } from '../components/Visuals';
+import { VoiceRibbon } from '../components/VoiceRibbon';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, errorMessage } from '../api/client';
 import type { CommandResponse, EvidencePreview, JDocument, RunEvent } from '../api/types';
@@ -212,6 +213,7 @@ export function ConsolePage() {
         </div>
       </header>
 
+      <VoiceRibbon />
       <div className="thread" aria-live="polite" data-testid="thread">
         {conv.loadError && <ErrorBox error={conv.loadError} />}
         {conv.thread.length === 0 && <p className="empty">Say or type what you need: “Add review lab report tomorrow at 3pm”, “What’s due this week?”</p>}

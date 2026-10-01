@@ -218,10 +218,11 @@ export const api = {
   budget: () => request<T.Budget>('/api/budget'),
   weather: () => request<import('../components/Visuals').WeatherVisual>('/api/weather'),
   brain: () =>
-    request<{ mode: 'v2_agent' | 'offline'; reason: string | null; web_research: boolean; model: string; tools: string[]; notes: string }>(
+    request<{ mode: 'v2_agent' | 'offline'; reason: string | null; web_research: boolean; max_searches: number; model: string; tools: string[]; notes: string }>(
       '/api/brain',
     ),
-  setResearch: (web_enabled: boolean) => request<unknown>('/api/settings', { method: 'PATCH', json: { research: { web_enabled } } }),
+  setResearch: (research: { web_enabled?: boolean; max_searches?: number }) =>
+    request<unknown>('/api/settings', { method: 'PATCH', json: { research } }),
   patchBudget: (b: Partial<T.Budget>) => request<T.Budget>('/api/budget', { method: 'PATCH', json: b }),
   doctor: () => request<{ checks: T.DoctorCheck[] }>('/api/doctor'),
   latency: () => request<T.LatencyMetrics>('/api/metrics/latency'),
