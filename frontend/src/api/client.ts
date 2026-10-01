@@ -225,6 +225,13 @@ export const api = {
   disconnect: (account_id: string) => request<unknown>(`/api/integrations/${encodeURIComponent(account_id)}`, { method: 'DELETE' }),
   localRoots: () => request<T.LocalRoot[]>('/api/localops/roots'),
   addLocalRoot: (r: { path: string; label: string; writable: boolean }) => request<T.LocalRoot>('/api/localops/roots', { json: r }),
+  connectors: () => request<T.Connector[]>('/api/connectors'),
+  connectConnector: (id: string, values: Record<string, string>) =>
+    request<T.Connector>(`/api/connectors/${encodeURIComponent(id)}/connect`, { json: { values } }),
+  connectorResources: (id: string) => request<T.ConnectorResources>(`/api/connectors/${encodeURIComponent(id)}/resources`),
+  setConnectorResources: (id: string, sel: { read?: string[]; write?: string[] }) =>
+    request<T.ConnectorResources>(`/api/connectors/${encodeURIComponent(id)}/resources`, { json: sel }),
+  spotifyStart: () => request<{ auth_url: string }>('/api/connectors/spotify/start', { method: 'POST' }),
   vault: () => request<T.VaultStatus>('/api/vault'),
   setVaultIndexed: (rootId: string, enabled: boolean) =>
     request<T.VaultStatus>(`/api/vault/roots/${encodeURIComponent(rootId)}`, { json: { enabled } }),

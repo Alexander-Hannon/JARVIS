@@ -254,3 +254,53 @@ def mail_provider(conn: sqlite3.Connection, box: str):
         return GmailAdapter(_google_credentials(conn, acct))
     from jarvis.integrations.microsoft import OutlookAdapter
     return OutlookAdapter(_microsoft_credentials(conn, acct))
+
+
+# ---------- V4 app connectors (Notion, Slack, Canvas, Spotify, Home Assistant, routing, SimpleFIN) ----------
+APP_PROVIDERS = ("notion", "slack", "canvas", "spotify", "homeassistant", "routing", "simplefin")
+
+
+def app_provider(conn: sqlite3.Connection, provider: str):
+    if provider in _overrides:
+        return _overrides[provider]
+    acct = get_account(conn, provider)
+    if not acct or acct["status"] not in ("connected", "error"):
+        raise NotConnected(provider, "Connect it in Settings → Integrations.")
+    secret, cfg = read_secret(acct), acct["config"]
+    if provider == "notion":
+        from jarvis.integrations.notion import NotionAdapter
+        return NotionAdapter(secret)
+    if provider == "slack":
+        from jarvis.integrations.slack import SlackAdapter
+        return SlackAdapter(secret)
+    if provider == "canvas":
+        from jarvis.integrations.canvas import CanvasAdapter
+        return CanvasAdapter(cfg["base_url"], secret)
+    if provider == "homeassistant":
+        from jarvis.integrations.homeassistant import HomeAssistantAdapter
+        return HomeAssistantAdapter(cfg["base_url"], secret)
+    if provider == "routing":
+        from jarvis.integrations.routing import RoutingAdapter
+        return RoutingAdapter(secret)
+    if provider == "simplefin":
+        from jarvis.integrations.simplefin import SimpleFinAdapter
+        return SimpleFinAdapter(secret)
+    if provider == "spotify":
+        from jarvis.integrations.spotify import SpotifyAdapter, SpotifyCredentials
+        s = get_settings()
+        aid = acct["id"]
+
+        def updater(new_tokens: dict) -> None:
+            from jarvis.core.db import connection
+            with connection() as c2:
+                update_secret(c2, aid, json.dumps(new_tokens))
+        return SpotifyAdapter(SpotifyCredentials(json.loads(secret or "{}"), s.spotify_client_id or "",
+                                                 token_updater=updater))
+    raise NotConnected(provider, "Unknown provider.")
+
+
+def app_connected(conn: sqlite3.Connection, provider: str) -> bool:
+    if provider in _overrides:
+        return True
+    acct = get_account(conn, provider)
+    return bool(acct and acct["status"] in ("connected", "error"))

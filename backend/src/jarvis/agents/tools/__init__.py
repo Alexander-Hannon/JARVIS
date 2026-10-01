@@ -18,7 +18,7 @@ from typing import Any, Literal
 
 Risk = Literal["read", "propose", "act"]
 TOOL_SEARCH = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
-MODULES = ("planning", "knowledge", "workspace", "propose", "mail")
+MODULES = ("planning", "knowledge", "workspace", "propose", "mail", "apps")
 
 
 @dataclass(frozen=True)

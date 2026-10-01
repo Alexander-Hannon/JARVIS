@@ -96,6 +96,31 @@ for _box, _acct, _name in (("gmail", "google", "Gmail"), ("outlook", "microsoft"
                         "mail_send", grant_always=True, reaches_others=True))
 
 
+_APPS = "jarvis.actions.handlers_apps"
+for _at in (
+    ActionType("notion.page.create", "notion", f"{_APPS}:h_notion_create", Tier.T1, "marker",
+               "Create a Notion page under a page you chose", "notion", "notion_page", grant_always=True),
+    ActionType("notion.page.append", "notion", f"{_APPS}:h_notion_append", Tier.T1, "none",
+               "Append a note to a Notion page you chose", "notion", "notion_page", grant_always=True),
+    ActionType("slack.post_self", "slack", f"{_APPS}:h_slack_post", Tier.T1, "marker", "Post to your own Slack DM",
+               "slack", "slack_self", grant_always=True),
+    ActionType("slack.post", "slack", f"{_APPS}:h_slack_post", Tier.T2, "marker", "Post a Slack message as you",
+               "slack", "slack_channel", grant_always=True, reaches_others=True),
+    ActionType("music.play", "spotify", f"{_APPS}:h_music", Tier.T1, "native", "Play music on Spotify", "spotify"),
+    ActionType("music.pause", "spotify", f"{_APPS}:h_music", Tier.T1, "native", "Pause Spotify", "spotify"),
+    ActionType("music.next", "spotify", f"{_APPS}:h_music", Tier.T1, "none", "Skip to the next track", "spotify"),
+    ActionType("music.queue", "spotify", f"{_APPS}:h_music", Tier.T1, "none", "Queue a track on Spotify", "spotify"),
+    ActionType("home.control", "homeassistant", f"{_APPS}:h_home", Tier.T1, "native",
+               "Control a comfort device (lights, switches, scenes, media, climate)", "homeassistant", "ha_entity",
+               grant_always=True),
+    # Physical security: locks, alarms, garage doors, scripts/automations — never automatable.
+    ActionType("home.secure", "homeassistant", f"{_APPS}:h_home", Tier.T2, "native",
+               "Operate a security device (lock, alarm, garage door, script)", "homeassistant", "ha_entity",
+               grant_always=True),
+):
+    register(_at)
+
+
 def get(name: str) -> ActionType | None:
     return REGISTRY.get(name)
 

@@ -646,3 +646,26 @@ h3, h4 { font-size: 0.92rem; font-weight: 600; color: var(--text-2); }
 .email-head dd { margin: 0; overflow-wrap: anywhere; }
 .email-body { white-space: pre-wrap; font-family: var(--font); font-size: 0.92rem; margin: 0; max-height: 18rem; overflow: auto; }
 .mailbox-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-bottom: 1px solid rgba(0, 216, 255, 0.08); }
+
+/* ---------------------------------------------------------------- V4: app connectors */
+.family-head { margin: 10px 0 6px; font-size: 0.85rem; color: var(--muted); font-weight: 600; }
+.connectors { display: flex; flex-direction: column; gap: 6px; }
+.connector { border: 1px solid rgba(0, 216, 255, 0.14); background: rgba(0, 12, 26, 0.35); }
+.connector.is-connected { border-color: rgba(0, 216, 255, 0.35); }
+.connector-head {
+  width: 100%; display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 10px; text-align: left;
+  padding: 10px 12px; background: none; border: 0; color: var(--text); cursor: pointer; font: inherit;
+}
+.connector-name { font-weight: 600; }
+.connector-sum { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connector-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 10px; }
+.connector-form { display: flex; flex-direction: column; gap: 8px; max-width: 32rem; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-write { border-color: var(--accent-2); }
+.pick-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.pick-table th, .pick-table td { padding: 4px 6px; border-bottom: 1px solid rgba(0, 216, 255, 0.08); text-align: left; }
+.pick-table td { width: 4.5rem; text-align: center; }
+@media (max-width: 640px) {
+  .connector-head { grid-template-columns: 1fr auto; }
+  .connector-sum { grid-column: 1 / -1; white-space: normal; }
+}

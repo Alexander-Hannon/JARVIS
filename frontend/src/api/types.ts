@@ -565,3 +565,27 @@ export interface VaultStatus {
   indexed_roots: string[];
   last_index: Record<string, { at: ISODate; new_or_changed: number; unchanged: number; removed: number; skipped: number; failed: number }>;
 }
+
+// ---------------------------------------------------------------- V4: app connectors
+export interface Connector {
+  id: string;
+  name: string;
+  family: string;
+  auth: 'token' | 'oauth';
+  summary: string;
+  reads: string[];
+  writes: string[];
+  fields: { key: string; label: string; secret: boolean; placeholder: string }[];
+  steps: string[];
+  status: string;
+  simulated: boolean;
+  account: Integration | null;
+  resource: { type: string; label: string; access: ('read' | 'write')[] } | null;
+  oauth?: { configured: boolean; redirect_uri: string };
+}
+export interface ConnectorResources {
+  type: string;
+  label: string;
+  access: ('read' | 'write')[];
+  items: { id: string; name: string; detail?: string; read?: boolean; write?: boolean }[];
+}

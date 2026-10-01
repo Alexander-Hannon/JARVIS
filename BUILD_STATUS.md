@@ -46,8 +46,21 @@ tiered autonomy). Milestones M0 → M4; this session landed **M0**.
   - Not live-verified: needs AJ's Gmail API enablement / Azure app registration (see Blockers).
 - **Tests:** backend 274 passed (+21: 12 mail flows incl. reconcile/no-resend/grant revocation/undo, 9 respx adapter
   tests); UI (mocked) 15 passed.
-- **Next (M1 cont.):** Obsidian vault indexing, then Notion, Slack, Canvas, Spotify, Home Assistant, travel time,
-  SimpleFIN — each with a contract fake, connect flow, grants and registered action types.
+- **M1 · Vault indexing:** opt-in per workspace root ("Index into search"); worker re-indexes every 30 min; hidden
+  folders (`.obsidian`) and secret-looking files skipped; deleted notes, disabled roots and removed roots are forgotten.
+- **M1 · App connectors** (`integrations/connectors.py` catalog → Settings "Apps" card renders from it):
+  | App | Reads | Proposes (tier) | Rails in code |
+  |---|---|---|---|
+  | Notion (integration secret) | search, read page | page.create (T1), page.append (T1) | only under pages AJ grants; duplicate title refused; create reconciled by title |
+  | Slack (user token) | mentions, search | post_self (T1), post (T2, reaches others) | channel must be named by AJ *and* granted; hidden message metadata reconciles posts |
+  | Canvas (token, read-only) | courses, to-dos, upcoming, announcements | — | SSRF-guarded base URL; pagination never leaves the host |
+  | Spotify (OAuth PKCE, 127.0.0.1 redirect) | now playing, search | play/pause (T1), next/queue (T1, never repeated on unclear outcome) | no-device → clear failure |
+  | Home Assistant (LAN URL + token) | allowlisted states | home.control (T1), home.secure (T2) | tier derived from entity domain in the proposal *and* re-derived by the executor; control requires visibility; metadata/link-local URLs refused |
+  | OpenRouteService | travel time | — | lon/lat order verified |
+  | SimpleFIN (setup token → access URL) | balances, transactions, unusual charges | — | read-only protocol; credentialed URL never logged/chained |
+- **Tests:** backend 295 passed (+21: 11 connector flows incl. injected-destination refusals and forged-tier block,
+  8 respx adapter tests, 2 vault); UI (mocked) 15 passed.
+- **Next:** M2 — MCP client hub.
 
 ## Session 6 update (2026-09-30): full speech, research headroom, UI refinement
 - **Speech cut off ~80% through:**
@@ -199,6 +212,9 @@ Measured on this host:
 - **Deliberately not used:** vector DB, Redis, LangGraph, n8n, containers (see ARCHITECTURE.md).
 
 ## Blockers (need AJ)
+0. V4 apps (each optional): Notion integration secret, Slack user token, Canvas token, Spotify app client ID
+   (`JARVIS_SPOTIFY_CLIENT_ID`), Home Assistant long-lived token, OpenRouteService key, SimpleFIN setup token —
+   Settings → Integrations → Apps shows the exact steps for each.
 0. V4 email: enable the Gmail API on the existing Google Cloud project (and add the two Gmail scopes to the consent
    screen); for Outlook, an Azure app registration (Settings → Integrations → Email shows the exact steps and redirect
    URI) with `JARVIS_MICROSOFT_CLIENT_ID/SECRET` in `.env`.

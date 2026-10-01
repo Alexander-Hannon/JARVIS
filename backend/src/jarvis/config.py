@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     microsoft_client_id: str | None = None
     microsoft_client_secret: str | None = None
     microsoft_tenant: str = "common"      # "common" covers personal outlook.com and work/school accounts
+    spotify_client_id: str | None = None  # PKCE public client: no secret needed
 
     # Web Push VAPID
     vapid_public_key: str | None = None

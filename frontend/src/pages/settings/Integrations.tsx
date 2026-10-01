@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, errorMessage } from '../../api/client';
 import type { GoogleCalendar, Integration, Mailbox } from '../../api/types';
+import { AppConnectors } from '../../components/AppConnectors';
 import { Async, Badge, Card, Empty, ErrorBox, KV, ReasonButton, SecretForm, StateBadge } from '../../components/ui';
 import { fmtDateTime, fmtRelative, humanValue, textOf } from '../../lib/format';
 import { useAsync } from '../../lib/hooks';
@@ -656,6 +657,7 @@ export function IntegrationsSection() {
       <TodoistSection integration={find('todoist')} onChanged={reload} />
       <GoogleSection integrations={list} />
       <EmailSection integrations={list} onChanged={reload} />
+      <AppConnectors />
       <IcsSection integration={find('ics')} onChanged={reload} />
       <GithubSection onChanged={reload} />
       <Card title="Anthropic (reasoning model)" id="connect-anthropic">

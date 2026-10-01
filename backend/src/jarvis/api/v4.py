@@ -237,3 +237,98 @@ def vault_reindex(root_id: str, conn=Depends(db)):
         raise HTTPException(409, {"code": "not_indexed", "message": "Turn on search indexing for this folder first."})
     jobs.enqueue(conn, "vault_index", {"root_id": root_id}, dedupe_key=f"vault:{root_id}:now:{time.time_ns()}")
     return {"queued": True}
+
+
+# ------------------------------------------------------------------------------------------------ app connectors
+SPOTIFY_BINDING_COOKIE = "jarvis_spotify_oauth_binding"
+SPOTIFY_CALLBACK_PATH = "/api/integrations/spotify/callback"
+
+
+class ConnectIn(BaseModel):
+    values: dict[str, str]
+
+
+class ResourcesIn(BaseModel):
+    read: list[str] | None = None
+    write: list[str] | None = None
+
+
+def _conn_err(e):
+    from jarvis.integrations.accounts import NotConnected
+    from jarvis.integrations.base import ProviderError
+    if isinstance(e, NotConnected):
+        raise HTTPException(409, {"code": "not_connected", "message": str(e)}) from None
+    if isinstance(e, ProviderError):
+        raise HTTPException(502, {"code": e.kind, "message": e.message}) from None
+    _serr(e)
+
+
+@router.get("/connectors")
+def connectors_list(conn=Depends(db)):
+    from jarvis.integrations import connectors as C
+    return C.catalog(conn)
+
+
+@router.post("/connectors/{cid}/connect")
+def connector_connect(cid: str, body: ConnectIn, conn=Depends(db)):
+    from jarvis.integrations import connectors as C
+    from jarvis.integrations.service import SetupError
+    try:
+        return C.connect(conn, cid, body.values)
+    except SetupError as e:
+        _serr(e)
+
+
+@router.get("/connectors/{cid}/resources")
+def connector_resources(cid: str, conn=Depends(db)):
+    from jarvis.integrations import connectors as C
+    from jarvis.integrations.accounts import NotConnected
+    from jarvis.integrations.base import ProviderError
+    from jarvis.integrations.service import SetupError
+    if cid not in C.CATALOG:
+        raise HTTPException(404)
+    try:
+        return C.resources(conn, cid)
+    except (SetupError, NotConnected, ProviderError) as e:
+        _conn_err(e)
+
+
+@router.post("/connectors/{cid}/resources")
+def connector_set_resources(cid: str, body: ResourcesIn, conn=Depends(db)):
+    from jarvis.integrations import connectors as C
+    from jarvis.integrations.accounts import NotConnected
+    from jarvis.integrations.base import ProviderError
+    from jarvis.integrations.service import SetupError
+    if cid not in C.CATALOG:
+        raise HTTPException(404)
+    try:
+        return C.set_resources(conn, cid, {"read": body.read or [], "write": body.write or []})
+    except (SetupError, NotConnected, ProviderError) as e:
+        _conn_err(e)
+
+
+@router.post("/connectors/spotify/start")
+def spotify_start(response: Response, conn=Depends(db)):
+    from jarvis.integrations import connectors as C
+    from jarvis.integrations.service import SetupError
+    try:
+        url, binding = C.spotify_start(conn)
+    except SetupError as e:
+        _serr(e)
+    response.set_cookie(SPOTIFY_BINDING_COOKIE, binding, httponly=True, samesite="lax", secure=get_settings().remote_mode,
+                        max_age=600, path=SPOTIFY_CALLBACK_PATH)
+    return {"auth_url": url}
+
+
+@public.get("/integrations/spotify/callback")
+def spotify_callback(request: Request, state: str = "", code: str | None = None, error: str | None = None,
+                     conn=Depends(db)):
+    from jarvis.integrations import connectors as C
+    from jarvis.integrations.service import SetupError
+    try:
+        C.spotify_callback(conn, state, code, error, request.cookies.get(SPOTIFY_BINDING_COOKIE))
+        resp = RedirectResponse("/settings?connected=spotify", status_code=303)
+    except SetupError as e:
+        resp = RedirectResponse(f"/settings?connect_error={e.code}", status_code=303)
+    resp.delete_cookie(SPOTIFY_BINDING_COOKIE, path=SPOTIFY_CALLBACK_PATH)
+    return resp
