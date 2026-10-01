@@ -35,14 +35,26 @@ function richApi(): MockApi {
     .on('GET', '/api/localops/roots', j([{ id: 'r1', path: '/home/aj/jarvis-workspace', label: 'Workspace', writable: false }]))
     .on('GET', '/api/backups', j([{ id: 'bk1', path: '/data/backups/bk1.tar', sha256: 'deadbeef', bytes: 204800, schema_version: 3, created_at: now }]))
     .on('GET', '/api/doctor', j({ checks: [{ name: 'database', status: 'ok', detail: 'schema v3', remedy: null }, { name: 'stt', status: 'warn', detail: 'model not warmed', remedy: 'Settings → Voice → Warm up' }] }))
+    .on('GET', '/api/headsup', j({ cards: [{ kind: 'approvals', tone: 'attention', title: '1 waiting for your approval', detail: 'Add task', link: '/actions' }, { kind: 'leave_by', tone: 'attention', title: 'Leave by 4:02 PM for Advisor meeting', detail: 'About 20 min', link: '/' }] }))
+    .on('GET', '/api/report/weekly', j({ commands: 12, actions_done: 5, auto_approved: 2, mission_runs: 9, spend_usd: 0.84, minutes_saved_estimate: 49, estimate_basis: 'x' }))
+    .on('GET', '/api/missions', j({ missions: [{ id: 'm1', name: 'Inbox watch', goal: 'Check my inbox for anything from my advisor.', schedule: { kind: 'interval', minutes: 120 }, tz: 'America/Chicago', families: ['email'], allow_proposals: false, output: 'quiet', max_cost_usd: 0.25, monthly_cost_usd: 5, month_spend: 0.4, quiet_start: '22:00', quiet_end: '07:00', enabled: true, next_run_at: new Date(Date.now() + 3600e3).toISOString(), last_run_at: now, last_status: 'done', last_summary: 'Dr. Lee wants grades by Friday.', runs: [{ id: 'r1', run_id: 'x', started_at: now, finished_at: now, status: 'done', summary: 'Dr. Lee wants grades by Friday.', cost_usd: 0.03, proposal_id: null }] }], templates: [{ key: 'inbox_watch', name: 'Inbox watch', goal: 'x', schedule: { kind: 'interval', minutes: 120 }, families: ['email'], output: 'quiet' }], families: ['chief', 'email', 'calendar'], read_only_families: ['chief'] }))
+    .on('GET', '/api/briefings', j([{ id: 'b1', kind: 'daily_command', for_date: '2026-10-01', content: { headline: 'Grading day with a GTA shift at six', mission: 'Finish IS 640 grading', first_action: 'Open the rubric' }, spoken_summary: 'Grading day.', sources: null, generated_by: 'deterministic', catch_up: false, created_at: now }]))
+    .on('GET', '/api/plan/history', j([]))
+    .on('GET', '/api/inbox', j({ items: [{ ref: 'gmail:1', mailbox: 'gmail', category: 'needs_reply', from_name: 'Dr. Lee', sender_email: 'lee@uah.edu', subject: 'Grades', snippet: 'Can you send the midterm grades?', date: now, unread: true, web_url: null }, { ref: 'gmail:2', mailbox: 'gmail', category: 'fyi', from_name: 'Sam', sender_email: 's@x', subject: 'Lab moved', snippet: 'Room 210', date: now, unread: false, web_url: null }], counts: { needs_reply: 1, waiting: 0, fyi: 1, bulk: 3 }, sources: { gmail: { status: 'ok', count: 2 } }, mailboxes: { gmail: { status: 'connected', address: 'aj@example.test' }, outlook: { status: 'not_connected', address: null } } }))
+    .on('GET', '/api/sandbox', j({ runtime: 'docker', available: false, detail: 'Docker isn’t available in WSL. Enable Docker Desktop → Settings → Resources → WSL integration.', simulated: false, network: { active: false, domains: [], until: null }, latest_shot: null, computer_use: true }))
+    .on('GET', '/api/sandbox/history', j([{ id: 'x1', run_id: null, kind: 'exec', detail: 'python3 analyze.py', exit_code: 0, output: 'Total: $1,204', duration_ms: 230, created_at: now }]))
+    .on('GET', '/api/skills', j([{ name: 'weekly-report', title: 'weekly-report', description: 'How AJ formats his weekly GTA report', enabled: true, files: ['SKILL.md'], chars: 120 }]))
+    .on('GET', '/api/manual', j({ assistant_name: 'JARVIS', guides: [{ id: 'getting-started', title: 'Getting started', markdown: '# Getting started\nTalk to it.\n\n- One\n- Two' }], reference: { capabilities: [{ family: 'email', label: 'Email', tools: [{ name: 'check_inbox', what: 'Triage email', example: 'Anything to answer?', risk: 'Reads only' }] }], actions: [{ action_type: 'task.create', label: 'Create a Todoist task', provider: 'todoist', tier: 1, automatable: true, undo: 'task.delete', reaches_others: false }, { action_type: 'gmail.send', label: 'Send an email from Gmail', provider: 'gmail', tier: 2, automatable: false, undo: null, reaches_others: true }], connectors: [] } }))
+    .on('GET', '/api/policies', j({ rules: [], catalog: [{ action_type: 'task.create', label: 'Create a Todoist task', provider: 'todoist', tier: 1, automatable: true, undo: 'task.delete', reaches_others: false }], undo_window_minutes: 5 }))
     .on('GET', '/api/metrics/latency', j({ stt: { count: 3, p50_ms: 800, p95_ms: 1400, last_ms: 812 } }));
   return api;
 }
 
-const ROUTES = ['/', '/console', '/actions', '/projects', '/memory', '/briefings', '/activity', '/notifications', '/more'];
+const ROUTES = ['/', '/console', '/inbox', '/actions', '/missions', '/workbench', '/connections', '/help', '/projects', '/memory', '/briefings', '/activity', '/notifications', '/more'];
 const SECTIONS = ['integrations', 'voice', 'schedules', 'notifications', 'budget', 'privacy', 'local', 'backups', 'doctor', 'security'];
 
 test('smoke: every route and settings section renders (mocked API)', async ({ page }) => {
+  test.setTimeout(120_000); // also captures desktop + phone screenshots of every V4 page
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await setupApp(page, richApi());
@@ -54,6 +66,27 @@ test('smoke: every route and settings section renders (mocked API)', async ({ pa
   await page.getByRole('tab', { name: 'History' }).click();
   await expect(page.getByTestId('history-entry')).toContainText('add review lab report tomorrow');
   await expect(page.getByTestId('history-entry')).toContainText('SIMULATED / contract mock');
+  await page.getByRole('tab', { name: 'Rules' }).click();
+  await expect(page.getByText('No rules yet')).toBeVisible();
+  await page.goto('/');
+  await expect(page.getByText('Leave by 4:02 PM for Advisor meeting')).toBeVisible();
+  await page.goto('/missions');
+  await expect(page.getByText('Dr. Lee wants grades by Friday.').first()).toBeVisible();
+  await page.goto('/inbox');
+  await expect(page.getByText('Can you send the midterm grades?')).toBeVisible();
+  await page.goto('/workbench');
+  await expect(page.getByRole('heading', { name: 'Set up the sandbox' })).toBeVisible();
+  await page.goto('/help');
+  await expect(page.getByText('Send an email from Gmail')).toBeVisible();
+  for (const r of ['/', '/missions', '/inbox', '/workbench', '/help']) {
+    for (const [w, h, tag] of [[1366, 900, 'desktop'], [390, 844, 'phone']] as const) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.goto(r);
+      await page.waitForTimeout(250);
+      await page.screenshot({ path: `e2e/screenshots/v4-${tag}${r === '/' ? '-today' : r.replace('/', '-')}.png`, fullPage: true });
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto('/memory');
   await page.getByRole('tab', { name: 'Documents' }).click();
   await expect(page.getByText('needs vision')).toBeVisible();

@@ -71,7 +71,30 @@ tiered autonomy). Milestones M0 → M4; this session landed **M0**.
   - Dynamic tools are built per request as `mcp__<server>__<tool>`, deferred behind tool search.
   - Not used: the Messages API server-side MCP connector (it would bypass the executor and approvals).
 - **Tests:** backend 302 passed (+7 MCP incl. a real stdio subprocess server); UI (mocked) 15 passed.
-- **Next:** M3 — sandbox (Docker), shell/browser/computer use, skills, Telegram channel, missions.
+- **M3 · Missions:** scheduled background agent runs (daily/weekly/interval, DST-safe), scoped tools, proposals only
+  if allowed (origin `mission`), per-run + monthly caps, quiet hours, quiet output (`NOTHING_NEW`), templates, history.
+- **M3 · Telegram:** outbound polling, one-time pairing code, single chat, approve/reject buttons bound to version +
+  hash, local STT for voice notes, forwards saved as untrusted notes, notification mirroring.
+- **M3 · Sandbox:** Docker image + egress allowlist proxy (`backend/sandbox/`), hardened `docker run`, tools for
+  shell/files/browser, network windows (`sandbox.network`, T2), export via `file.write`, computer toolset on the
+  sandbox display. **Not live-verified:** Docker isn't reachable from this WSL distro (Docker Desktop's WSL integration
+  is off), so the image has not been built or run here; everything is tested against a labeled FakeRuntime, and the
+  proxy's allowlist logic is tested directly.
+- **M3 · Skills:** SKILL.md folders installed by AJ, deferred `skill__` tools, helper files copied into the sandbox,
+  drafts need approval (`skill.install`, T2).
+- **M4 · Every page:** new nav (Today, Command, Inbox, Actions, Missions, Workbench, Memory, Projects, Connections,
+  Activity, Settings, Help); Ctrl-K command palette; brand name from settings; contextual "?" on page headers.
+  - Today: heads-up cards + weekly "what I did for you" line.
+  - Missions (replaces Briefings; `/briefings` redirects): today's briefing with timeline, play, "ask about today",
+    conversational nightly debrief, a 24-hour run rail, mission cards/history/templates, archive.
+  - Inbox: triage lanes, thread view, draft/summarize via Command.
+  - Actions: Rules tab (create/turn off), "approved by your rule" badge, Undo while the window is open.
+  - Workbench: sandbox screen, activity transcript, internet window, setup steps when Docker is missing, skills.
+  - Connections: all integrations (OAuth callbacks land here with a result banner). Help: searchable manual.
+  - Screenshots reviewed at 1366×900 and 390×844 (mocked data): `frontend/e2e/screenshots/v4-*.png`.
+  - Not done: merging `styles.css` + `hud.css` into one token file (deferred; V4 styles are scoped and additive).
+- **Tests:** backend 329 passed; ruff clean; frontend typecheck + build pass; UI (mocked) 15 passed (smoke covers every
+  V4 route).
 
 ## Session 6 update (2026-09-30): full speech, research headroom, UI refinement
 - **Speech cut off ~80% through:**
@@ -223,6 +246,8 @@ Measured on this host:
 - **Deliberately not used:** vector DB, Redis, LangGraph, n8n, containers (see ARCHITECTURE.md).
 
 ## Blockers (need AJ)
+0. V4 sandbox: Docker Desktop → Settings → Resources → WSL integration → enable for this Ubuntu distro, restart
+   JARVIS, then Workbench → Build sandbox. Then run the live sandbox checks (network window, browser, desktop).
 0. V4 apps (each optional): Notion integration secret, Slack user token, Canvas token, Spotify app client ID
    (`JARVIS_SPOTIFY_CLIENT_ID`), Home Assistant long-lived token, OpenRouteService key, SimpleFIN setup token —
    Settings → Integrations → Apps shows the exact steps for each.

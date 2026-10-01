@@ -35,6 +35,17 @@ The agent loop:
 
 Without a key or budget, the deterministic router below runs ("offline mode"). It no longer turns questions or look-ups into tasks.
 
+## V4 operator layer
+- **Integrations:** Gmail/Outlook (`integrations/gmail.py`, `microsoft.py`), app connectors from one catalog
+  (`integrations/connectors.py`: Notion, Slack, Canvas, Spotify, Home Assistant, OpenRouteService, SimpleFIN), MCP hub
+  (`integrations/mcp_hub.py`). Each adapter has a labeled fake and registers its action types with tiers.
+- **Missions** (`missions/service.py`): scheduled agent runs with `agent.Scope` (families, proposals, origin, budgets).
+- **Channels** (`channels/telegram.py`): outbound polling, one paired chat, hash-bound approval buttons.
+- **Sandbox** (`sandbox/`, `backend/sandbox/`): Docker container + egress allowlist proxy; computer toolset handled in
+  the agent loop; skills (`skills/service.py`) loaded as deferred tools.
+- **Help** (`manual/`): hand-written guides + reference generated from the registries; `search_manual` tool.
+- **Today heads-up** (`headsup.py`): deterministic proactive cards (approvals, leave-by, conflicts, deadlines, email).
+
 ## Command flow
 1. **Capture** — audio → `/api/captures/audio` (PyAV decode: WebM/Opus, MP4/AAC, Ogg, WAV, MP3; size ≤ 25 MB, ≤ 300 s) →
    local STT → `TranscriptVersion` (editable; edits create new versions). Raw audio is discarded unless AJ opts in.

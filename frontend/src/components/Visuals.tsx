@@ -61,7 +61,13 @@ export interface InboxVisual {
     web_url: string | null;
   }[];
 }
-export type Visual = CalendarVisual | WeatherVisual | TasksVisual | SlotsVisual | InboxVisual;
+export interface ScreenshotVisual {
+  type: 'screenshot';
+  shot_id: string;
+  title?: string | null;
+  url?: string | null;
+}
+export type Visual = CalendarVisual | WeatherVisual | TasksVisual | SlotsVisual | InboxVisual | ScreenshotVisual;
 
 export const MAIL_CATEGORY: Record<string, string> = {
   needs_reply: 'Needs reply',
@@ -364,6 +370,13 @@ export function Visuals({ items }: { items?: Visual[] | null }) {
             <SlotsCard key={i} v={v} />
           ) : v.type === 'inbox' ? (
             <InboxCard key={i} v={v} />
+          ) : v.type === 'screenshot' ? (
+            <figure key={i} className="viz viz-shot">
+              <div className="viz-head">
+                {v.title || 'Sandbox browser'} {v.url && <span className="muted small">{v.url}</span>}
+              </div>
+              <img src={`/api/sandbox/shots/${v.shot_id}`} alt={`Screenshot of ${v.title || v.url || 'the page'}`} />
+            </figure>
           ) : null,
         )}
     </div>

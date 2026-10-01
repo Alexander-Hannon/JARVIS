@@ -162,9 +162,9 @@ def microsoft_callback(request: Request, state: str = "", code: str | None = Non
     from jarvis.integrations.service import microsoft_callback as cb
     try:
         cb(conn, state, code, error, request.cookies.get(MS_BINDING_COOKIE))
-        resp = RedirectResponse("/settings?connected=microsoft", status_code=303)
+        resp = RedirectResponse("/connections?connected=microsoft", status_code=303)
     except SetupError as e:
-        resp = RedirectResponse(f"/settings?connect_error={e.code}", status_code=303)
+        resp = RedirectResponse(f"/connections?connect_error={e.code}", status_code=303)
     resp.delete_cookie(MS_BINDING_COOKIE, path=MS_CALLBACK_PATH)
     return resp
 
@@ -327,9 +327,9 @@ def spotify_callback(request: Request, state: str = "", code: str | None = None,
     from jarvis.integrations.service import SetupError
     try:
         C.spotify_callback(conn, state, code, error, request.cookies.get(SPOTIFY_BINDING_COOKIE))
-        resp = RedirectResponse("/settings?connected=spotify", status_code=303)
+        resp = RedirectResponse("/connections?connected=spotify", status_code=303)
     except SetupError as e:
-        resp = RedirectResponse(f"/settings?connect_error={e.code}", status_code=303)
+        resp = RedirectResponse(f"/connections?connect_error={e.code}", status_code=303)
     resp.delete_cookie(SPOTIFY_BINDING_COOKIE, path=SPOTIFY_CALLBACK_PATH)
     return resp
 

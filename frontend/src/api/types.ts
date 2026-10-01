@@ -228,6 +228,10 @@ export interface ActionHistoryEntry {
   approved_at: ISODate | null;
   receipt: Receipt | null;
   attempts: { at?: ISODate; state?: string; error?: string | null; [k: string]: unknown }[];
+  action_id?: string;
+  auto_approved?: boolean;
+  undo_until?: ISODate | null;
+  undone_by?: string | null;
   [k: string]: unknown;
 }
 
@@ -499,6 +503,7 @@ export interface ActivityEvent {
   kind: string;
   message: string;
   run_id?: string;
+  actor?: string;
   entity_type?: string;
   entity_id?: string;
 }
@@ -624,4 +629,146 @@ export interface TelegramStatus {
   account_id?: string;
   notify?: boolean;
   simulated?: boolean;
+}
+
+// ---------------------------------------------------------------- V4: Today, Help, Policies, Missions, Workbench
+export interface HeadsUpCard {
+  kind: 'approvals' | 'leave_by' | 'conflict' | 'deadlines' | 'email' | 'mission';
+  tone: 'attention' | 'warn' | 'info';
+  title: string;
+  detail: string;
+  link: string;
+}
+export interface WeeklyReport {
+  commands: number;
+  actions_done: number;
+  auto_approved: number;
+  mission_runs: number;
+  spend_usd: number;
+  minutes_saved_estimate: number;
+  estimate_basis: string;
+}
+export interface ManualTool {
+  name: string;
+  what: string;
+  example: string;
+  risk: string;
+}
+export interface ActionCatalogItem {
+  action_type: string;
+  label: string;
+  provider: string;
+  tier: 1 | 2 | 3;
+  automatable: boolean;
+  undo: string | null;
+  reaches_others: boolean;
+}
+export interface Manual {
+  assistant_name: string;
+  guides: { id: string; title: string; markdown: string }[];
+  reference: {
+    capabilities: { family: string; label: string; tools: ManualTool[] }[];
+    actions: ActionCatalogItem[];
+    connectors: { id: string; name: string; summary: string; reads: string[]; writes: string[]; status: string }[];
+  };
+}
+export interface ManualHit {
+  guide: string;
+  id: string;
+  text: string;
+}
+export interface PolicyRule {
+  id: string;
+  action_type: string;
+  action_label: string;
+  label: string;
+  match: Record<string, unknown>;
+  origins: string[];
+  daily_cap: number;
+  used_24h: number;
+  created_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  active: boolean;
+}
+export interface PoliciesResponse {
+  rules: PolicyRule[];
+  catalog: ActionCatalogItem[];
+  undo_window_minutes: number;
+}
+export interface MissionSchedule {
+  kind: 'daily' | 'weekly' | 'interval';
+  at?: string;
+  days?: number[];
+  minutes?: number;
+}
+export interface MissionRun {
+  id: string;
+  run_id: string | null;
+  started_at: string;
+  finished_at: string | null;
+  status: 'running' | 'done' | 'nothing_new' | 'failed' | 'skipped_budget';
+  summary: string | null;
+  cost_usd: number;
+  proposal_id: string | null;
+}
+export interface Mission {
+  id: string;
+  name: string;
+  goal: string;
+  schedule: MissionSchedule;
+  tz: string;
+  families: string[];
+  allow_proposals: boolean;
+  output: 'notify' | 'quiet';
+  max_cost_usd: number;
+  monthly_cost_usd: number;
+  month_spend: number;
+  quiet_start: string | null;
+  quiet_end: string | null;
+  enabled: boolean;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_status: string | null;
+  last_summary: string | null;
+  runs: MissionRun[];
+}
+export interface MissionTemplate extends Partial<Mission> {
+  key: string;
+}
+export interface MissionsResponse {
+  missions: Mission[];
+  templates: MissionTemplate[];
+  families: string[];
+  read_only_families: string[];
+}
+export interface SandboxStatus {
+  runtime: string;
+  available: boolean;
+  detail: string;
+  image?: boolean;
+  running?: boolean;
+  proxy?: boolean;
+  simulated: boolean;
+  network: { active: boolean; domains: string[]; until: string | null };
+  latest_shot: string | null;
+  computer_use?: boolean;
+}
+export interface SandboxRun {
+  id: string;
+  run_id: string | null;
+  kind: string;
+  detail: string;
+  exit_code: number | null;
+  output: string | null;
+  duration_ms: number | null;
+  created_at: string;
+}
+export interface Skill {
+  name: string;
+  title: string;
+  description: string;
+  enabled: boolean;
+  files: string[];
+  chars: number;
 }

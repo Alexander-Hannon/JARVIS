@@ -150,3 +150,29 @@ Approval `channel` is `button|voice|typed|policy|telegram|discord`. History item
 | POST | /api/backups | → `{id, path, sha256, bytes, schema_version}` ; GET /api/backups |
 | POST | /api/backups/{id}/restore-preview | → `{compatible, counts, will_disable:[..], pre_restore_backup:true}` |
 | POST | /api/backups/{id}/restore | `{confirm:true}` → `{ok, pre_restore_backup_id}` |
+
+## V4 endpoints (all session-authenticated unless noted; writes need `X-CSRF-Token`)
+| Area | Method | Path | Notes |
+|---|---|---|---|
+| Email | GET | /api/inbox?unread_only&limit&q | `{items:[MailItem], counts, sources, mailboxes}`; a failing mailbox is `unavailable`, never "empty" |
+| | GET | /api/inbox/thread?ref= | thread text, labeled untrusted |
+| | GET/POST | /api/integrations/microsoft/setup, /start `{with_send}` | Outlook OAuth (PKCE); callback is public: `/api/integrations/microsoft/callback` |
+| | POST | /api/integrations/mail/sending `{mailbox, enabled}` | creates/removes the `mail_send` grant |
+| Apps | GET | /api/connectors | catalog: fields, steps, reads, writes, status |
+| | POST | /api/connectors/{id}/connect `{values}` | token connectors |
+| | GET/POST | /api/connectors/{id}/resources `{read?, write?}` | allowlist picker (write requires read where both exist) |
+| | POST | /api/connectors/spotify/start | callback (public): `/api/integrations/spotify/callback` |
+| MCP | GET/POST | /api/mcp | add `{name, transport: stdio\|http, command?, args?, url?, env?, bearer?}` → discovers tools |
+| | POST | /api/mcp/{id}/discover, /review `{modes:{tool:{mode,tier}}}`, /enabled `{enabled}` | review pins the tool-list hash |
+| | DELETE | /api/mcp/{id} | |
+| Vault | GET/POST | /api/vault, /api/vault/roots/{id} `{enabled}`, /reindex | |
+| Missions | GET | /api/missions | `{missions, templates, families, read_only_families}` |
+| | POST/PATCH/DELETE | /api/missions[/{id}] | schedule `{kind: daily\|weekly\|interval, at?, days?, minutes?}` |
+| | POST | /api/missions/{id}/run, /enabled | run is queued for the worker |
+| Telegram | GET/POST | /api/channels/telegram `{token}`, /pair, /unpair, /notify `{notify}` | |
+| Sandbox | GET | /api/sandbox, /api/sandbox/history, /api/sandbox/shots/{id} (PNG) | |
+| | POST | /api/sandbox/start, /stop, /reset, /build, /network/close, /settings `{computer_use}` | |
+| Skills | GET/POST/DELETE | /api/skills, /install `{folder}`, /{name}/enabled, /{name} | |
+| Today | GET | /api/headsup, /api/report/weekly | proactive cards; weekly estimate with stated basis |
+| Help | GET | /api/manual, /api/manual/search?q= | guides + reference generated from registries |
+| Activity | GET | /api/activity?actor= | user\|policy\|mission\|channel\|system\|worker\|model |

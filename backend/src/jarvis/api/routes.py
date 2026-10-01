@@ -97,10 +97,10 @@ def google_callback(request: Request, state: str = "", code: str | None = None, 
     resp_err = None
     try:
         cb(conn, state, code, error, request.cookies.get(OAUTH_BINDING_COOKIE))
-        resp = RedirectResponse("/settings?connected=google", status_code=303)
+        resp = RedirectResponse("/connections?connected=google", status_code=303)
     except SetupError as e:
         resp_err = e.code
-        resp = RedirectResponse(f"/settings?connect_error={resp_err}", status_code=303)
+        resp = RedirectResponse(f"/connections?connect_error={resp_err}", status_code=303)
     resp.delete_cookie(OAUTH_BINDING_COOKIE, path=OAUTH_CALLBACK_PATH)
     return resp
 

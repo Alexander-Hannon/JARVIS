@@ -11,7 +11,11 @@ import { ConsolePage } from './pages/Console';
 import { ActionsPage } from './pages/Actions';
 import { ProjectsPage } from './pages/Projects';
 import { MemoryPage } from './pages/Memory';
-import { BriefingsPage } from './pages/Briefings';
+import { MissionsPage } from './pages/Missions';
+import { InboxPage } from './pages/Inbox';
+import { WorkbenchPage } from './pages/Workbench';
+import { ConnectionsPage } from './pages/Connections';
+import { HelpPage } from './pages/Help';
 import { ActivityPage } from './pages/Activity';
 import { SettingsPage } from './pages/Settings';
 import { NotificationsPage } from './pages/Notifications';
@@ -73,7 +77,12 @@ export function App() {
             <Route path="/actions" element={<ActionsPage />} />
             <Route path="/projects" element={<ProjectsPage />} />
             <Route path="/memory" element={<MemoryPage />} />
-            <Route path="/briefings" element={<BriefingsPage />} />
+            <Route path="/briefings" element={<Navigate to="/missions" replace />} />
+            <Route path="/missions" element={<MissionsPage />} />
+            <Route path="/inbox" element={<InboxPage />} />
+            <Route path="/workbench" element={<WorkbenchPage />} />
+            <Route path="/connections" element={<ConnectionsPage />} />
+            <Route path="/help" element={<HelpPage />} />
             <Route path="/activity" element={<ActivityPage />} />
             <Route path="/settings" element={<SettingsPage onLoggedOut={() => void check()} />} />
             <Route path="/notifications" element={<NotificationsPage />} />
