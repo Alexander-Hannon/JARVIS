@@ -252,6 +252,24 @@ function useConversationState(speak: (t: string | null | undefined) => void): Co
       const hex = Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => b.toString(16).padStart(2, '0')).join('');
       const client_run_id = `run_${hex}`;
       let polling = true;
+      // Live progress: server-sent events; fall back to polling if the stream can't open (old proxy, no SSE).
+      const live: string[] = [];
+      let es: EventSource | null = null;
+      try {
+        es = new EventSource(`/api/runs/${encodeURIComponent(client_run_id)}/stream`);
+        es.addEventListener('run_event', (m) => {
+          live.push((JSON.parse((m as MessageEvent).data) as { message: string }).message);
+          setLiveEvents([...live]);
+        });
+        es.addEventListener('done', () => es?.close());
+        es.onerror = () => {
+          es?.close();
+          es = null;
+          void poll();
+        };
+      } catch {
+        es = null;
+      }
       const poll = async () => {
         while (polling) {
           await new Promise((r) => setTimeout(r, 700));
@@ -264,7 +282,7 @@ function useConversationState(speak: (t: string | null | undefined) => void): Co
           }
         }
       };
-      void poll();
+      if (!es) void poll();
       try {
         const conversation_id = await ensureConversation();
         const resp = await api.command({ ...req, tz: req.tz ?? localTz(), conversation_id, client_run_id });
@@ -276,6 +294,7 @@ function useConversationState(speak: (t: string | null | undefined) => void): Co
         return null;
       } finally {
         polling = false;
+        es?.close();
         setSending(false);
         setLiveEvents([]);
       }

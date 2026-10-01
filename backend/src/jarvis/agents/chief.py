@@ -439,7 +439,14 @@ def _new_proposal(conn, inp: CommandInput, reply: Reply, run_id: str, title: str
                    assumptions=assumptions, questions=questions, source={"capture_id": inp.capture_id, "text": inp.text,
                                                                            "captured_at": inp.captured_at, "tz": inp.tz})
     reply.proposal_id = pid
-    run_event(conn, run_id, "approval", "Awaiting your approval")
+    from jarvis.actions import policy
+    auto = policy.try_auto_approve(conn, pid)
+    if auto:
+        rules = ", ".join(f"“{x}”" for x in auto["labels"])
+        reply.say(f"Approved automatically by your rule {rules}. You can undo it for the next five minutes.")
+        run_event(conn, run_id, "approval", f"Auto-approved by rule {rules}")
+    else:
+        run_event(conn, run_id, "approval", "Awaiting your approval")
     return pid
 
 

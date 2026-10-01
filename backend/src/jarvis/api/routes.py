@@ -484,7 +484,9 @@ def action_history(limit: int = 50, conn=Depends(db)):
                     "id": a["id"], "provider": a["provider"], "account_label": acct["label"] if acct else None,
                     "target": {"id": a["target_resource"], "name": jload(a["args"], {}).get("_target_name")},
                     "request_text": asked["text"] if asked else None, "approved_at": appr["created_at"] if appr else None,
-                    "undoable": a["state"] == "verified"})
+                    "undoable": a["state"] == "verified",
+                    "undo_until": a["undo_until"], "undone_by": a["undone_by"],
+                    "auto_approved": bool(appr and appr["channel"] == "policy")})
     return out
 
 
@@ -1119,18 +1121,20 @@ class SettingsPatch(BaseModel):
     notifications: dict[str, Any] | None = None
     models: dict[str, str] | None = None
     research: dict[str, Any] | None = None
+    brand: dict[str, str] | None = None
 
 
 @router.get("/brain")
 def brain(conn=Depends(db)):
-    from jarvis.agents import agent
+    from jarvis.agents import agent, tools
     ok, why = agent.available(conn)
     data = jload(row(conn, "SELECT data FROM user_settings WHERE id=1")["data"], {})
     return {"mode": "v2_agent" if ok else "offline", "reason": None if ok else why,
             "web_research": data.get("research", {}).get("web_enabled", True),
             "max_searches": agent.search_limit(conn),
             "model": (data.get("models") or {}).get("agent") or get_settings().model_default,
-            "tools": [t["name"] for t in agent.CLIENT_TOOLS],
+            "tools": [t.name for t in tools.offered(conn)],
+            "assistant_name": agent.assistant_name(conn),
             "notes": "Changes to Todoist/Calendar/files are always proposals you approve. Web search costs ~$0.01 per search "
                      "plus model tokens, all counted against your budget."}
 
@@ -1140,7 +1144,7 @@ def patch_settings(body: SettingsPatch, conn=Depends(db)):
     with tx(conn):
         r = row(conn, "SELECT * FROM user_settings WHERE id=1")
         data = jload(r["data"], {})
-        for k in ("voice", "privacy", "notifications", "models", "research"):
+        for k in ("voice", "privacy", "notifications", "models", "research", "brand"):
             v = getattr(body, k)
             if v is not None:
                 data[k] = data.get(k, {}) | v

@@ -39,7 +39,10 @@ The UI must show these distinctly from reasoning errors and keep the typed input
 `CommandRequest` = `{conversation_id, text, channel:"voice"|"typed", capture_id?, transcript_version?, captured_at, tz, speech_playing:boolean, attachments?:[document_id]}`
 (`captured_at` = when the user started speaking / pressed send; `speech_playing` = Jarvis TTS was audible during capture.)
 
-`CommandResponse` = `{run_id, status, message:Message, proposal:Proposal|null, questions:[string], citations:[Citation], events:[RunEvent], intent:string, specialists:[string]}`
+`CommandResponse` = `{run_id, status, message:Message, proposal:Proposal|null, questions:[string], citations:[Citation], events:[RunEvent], intent:string, specialists:[string], visuals:[Visual]}`
+
+`Visual` = one card payload discriminated by `type`: `calendar` (days, events, open windows, now line) | `weather` | `tasks` | `slots`
+(shapes in `agents/visuals.py`).
 
 `RunEvent` = `{id, run_id, kind, message, data, created_at}`. `Citation` = `{document_id, title, locator, excerpt, segment_id}`.
 
@@ -65,10 +68,25 @@ item `proposed|approved|queued|executing|verified|failed|unknown|conflict|cancel
 | GET | /api/control | → `{actions_paused, paused_at, reason, in_flight:[{action_id, summary, state}]}` |
 | POST | /api/control/pause | `{reason?}` → control |
 | POST | /api/control/resume | → control (does NOT replay previous approvals) |
+| GET | /api/policies | → `{rules:[Rule], catalog:[{action_type, label, provider, tier, automatable, undo, reaches_others}], undo_window_minutes}` |
+| POST | /api/policies | `{action_type, label, match?:{target_resource?, args?}, origins?:["command"\|"mission"\|"channel"], daily_cap?, expires_at?}` → `Rule` (400 `not_t1` for T2/T3 types) |
+| DELETE | /api/policies/{id} | → `Rule` (revoked) |
+| POST | /api/actions/{action_id}/undo | → `{proposal_id, idempotent, proposal}` (410 once the undo window passed; 409 if not undoable) |
+
+`Rule` = `{id, action_type, action_label, label, match, origins, daily_cap, used_24h, created_at, expires_at, revoked_at, active}`.
+Approval `channel` is `button|voice|typed|policy|telegram|discord`. History items add `auto_approved`, `undo_until`, `undone_by`.
+
+## Runs (live progress)
+| Method | Path | Body → Response |
+|---|---|---|
+| GET | /api/runs/{id} | → `{id, conversation_id, kind, status, specialists, cancel_requested, error, started_at, finished_at}` |
+| GET | /api/runs/{id}/events | → `[RunEvent]` |
+| GET | /api/runs/{id}/stream?after= | `text/event-stream`: `run_event` (`RunEvent`, SSE `id` = event id), then `done` (run view). Waits ≤15 s for the run to appear; ends after 600 s with `timeout` (reconnect with `after`). |
 
 ## Today, plans, briefings, schedules, notifications
 | Method | Path | Body → Response |
 |---|---|---|
+| GET | /api/weather | → weather `Visual` for today (current + 7-day), `{type:"weather", disabled:true}` when off; 503 if the forecast is unavailable |
 | GET | /api/today | → `{date, tz, now, plan:{mission, priorities, constraints, first_action, version, author}\|null, agenda:[Event], tasks_due:[Task], deadlines:[Deadline], conflicts:[string], work_windows:[{start,end,label}], sources:{todoist, calendar, deadlines: {status:"ok"\|"stale"\|"unavailable"\|"not_connected", last_sync, detail}}}` |
 | PUT | /api/plan/today | `{mission, priorities:[string], constraints?:[string], first_action?}` → plan |
 | GET | /api/plan/history?date= | → `[plan version]` |

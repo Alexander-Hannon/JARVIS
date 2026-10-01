@@ -18,6 +18,7 @@ import uuid
 from datetime import datetime
 
 from jarvis.actions import proposals as P
+from jarvis.actions import registry as R
 from jarvis.core.db import jdump, jload, row, tx
 from jarvis.core.util import audit, canonical_hash, new_id, now_iso, parse_iso, record_latency, run_event, utcnow
 from jarvis.integrations import accounts as A
@@ -68,22 +69,20 @@ def _guard(conn, a: dict, pv: dict, p: dict, approval_id: str) -> None:
         raise Blocked("superseded", "Plan was revised after approval; the old version will not run.")
     if parse_iso(appr["created_at"]) + P.EXECUTION_WINDOW < utcnow():
         raise Blocked("cancelled", "Approval is older than the execution window; re-propose to run it.")
-    if P.ALLOWED_ACTIONS.get(a["action_type"]) != a["provider"]:
+    at = R.get(a["action_type"])
+    if at is None or R.provider_for(at.name) != a["provider"]:
         raise Blocked("failed", f"Action type {a['action_type']} is not enabled.")
-    if a["provider"] == "local_fs":
+    if at.account_provider is None:
         return  # local operator checks its own root grants
-    provider_acct = {"todoist": "todoist", "google_calendar": "google"}[a["provider"]]
-    acct = A.get_account(conn, provider_acct)
+    acct = A.get_account(conn, at.account_provider)
     override = a["provider"] in A._overrides   # labeled contract fake installed (tests / simulated mode)
     if (acct is None and not override) or (acct is not None and acct["id"] != a["account_id"]):
         raise Blocked("failed", "The target account changed or was disconnected since approval; approval is void.")
     if acct is not None and acct["status"] not in ("connected", "error"):
-        raise Blocked("failed", f"{provider_acct} is {acct['status']}; reconnect it.")
-    if a["account_id"]:
-        rtype = "todoist_project" if a["provider"] == "todoist" else "calendar"
-        if a["action_type"] in ("task.create", "event.create", "event.update", "event.delete") or a["target_resource"]:
-            if not A.has_grant(conn, a["account_id"], rtype, a["target_resource"] or "", "write"):
-                raise Blocked("failed", f"No write permission recorded for {rtype} '{a['target_resource']}'.")
+        raise Blocked("failed", f"{at.account_provider} is {acct['status']}; reconnect it.")
+    if a["account_id"] and at.grant_type and (at.grant_always or a["target_resource"]):
+        if not A.has_grant(conn, a["account_id"], at.grant_type, a["target_resource"] or "", "write"):
+            raise Blocked("failed", f"No write permission recorded for {at.grant_type} '{a['target_resource']}'.")
 
 
 def _set_state(conn, a_id: str, state: str, **fields) -> None:
@@ -137,7 +136,7 @@ def execute(conn: sqlite3.Connection, action_id: str, approval_id: str, job_id: 
 
     # ---- phase 2: provider I/O (no DB transaction held) ----
     try:
-        handler = HANDLERS[a["action_type"]]
+        handler = R.get(a["action_type"]).resolve_handler()
         result = handler(conn, a, reconcile_first=prior_unknown)
     except Blocked as b:
         with tx(conn):
@@ -472,12 +471,6 @@ def h_file(conn, a: dict, reconcile_first: bool) -> dict:
     return files.execute_action(conn, a, reconcile_first)
 
 
-HANDLERS = {
-    "task.create": h_task_create, "task.update": h_task_update, "task.complete": h_task_complete,
-    "task.reopen": h_task_reopen, "task.delete": h_task_delete,
-    "event.create": h_event_create, "event.update": h_event_update, "event.delete": h_event_delete,
-    "file.write": h_file, "file.move": h_file,
-}
 
 
 def pause(conn: sqlite3.Connection, reason: str | None) -> dict:

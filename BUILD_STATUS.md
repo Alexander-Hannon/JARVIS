@@ -1,5 +1,35 @@
 # BUILD_STATUS
 
+## Session 7 update (2026-10-01): JARVIS V4 — M0 foundations
+Plan approved by AJ: V4 "Operator" (native sandboxed OpenClaw-style powers, all four integration families, MCP client,
+tiered autonomy). Milestones M0 → M4; this session landed **M0**.
+- **Tool registry** (`agents/tools/`): every agent tool is a registered `Tool` (schema, risk `read|propose|act`, family,
+  availability, Help text, example phrase). The 20 V2 tools moved over unchanged; dispatch no longer uses `getattr`.
+  Deferred tools are sent with `defer_loading` behind `tool_search_tool_bm25_20251119`.
+- **Action-type registry** (`actions/registry.py`): replaces `ALLOWED_ACTIONS` + `HANDLERS`. Each type declares provider,
+  handler, tier (T1/T2/T3), idempotency, account + grant needed, and undo inverse. `register()` refuses T1 for anything
+  that reaches other people.
+- **Tiered autonomy** (`actions/policy.py`, migration `0003_v4_autonomy.sql`): AJ-authored rules (UI/API only) can
+  auto-approve T1 actions — all-or-nothing per proposal, origin-scoped (AJ's own commands by default), 24 h caps,
+  revocable. Auto-approvals are normal approvals (`channel='policy'`) so every executor guard still runs. 5-minute
+  **Undo** for reversible auto-approved actions. Audit actor `policy`.
+- **Live run streaming:** `GET /api/runs/{id}` and SSE `GET /api/runs/{id}/stream`; the UI uses EventSource and falls
+  back to polling.
+- **Brand setting:** `settings.brand.assistant_name` drives the agent persona name (commercial rename = one setting).
+- **Docs:** CLAUDE.md safety section rewritten for tiers/registry; ARCHITECTURE.md V2 numbers fixed + V4 autonomy;
+  API_CONTRACT adds policies, undo, runs, `/api/weather`, `visuals`.
+- **Migration check:** `0003` applied to a *copy* of the real `data/jarvis.db`: row counts preserved (approvals 6,
+  audit 100, proposals 12), `integrity_check` ok, no FK violations. The real DB is migrated on next `serve`/`worker` start.
+- **Tests:** backend 253 passed (12 new V4: rule tiers, no-rule manual path, auto-approve → execute → undo, undo expiry,
+  all-or-nothing + caps, target match, origin scoping + pause, revocation, registry invariants, tool search, SSE);
+  ruff clean; frontend typecheck + build pass; UI (mocked) 15 passed.
+- **Environment note:** this host lacks `libasound.so.2` for Playwright's Chromium; tests ran with the library extracted
+  (not installed) into the session scratchpad via `LD_LIBRARY_PATH`. On your machine: `sudo npx playwright install-deps chromium`.
+- **Still AJ's decision:** opting into server-side refusal `fallbacks` (fallback-model pricing may sit outside the local
+  ledger) — left off.
+- **Next (M1):** Gmail + Outlook (read/triage, drafts), Obsidian vault indexing, then Notion, Slack, Canvas, Spotify,
+  Home Assistant, travel time, SimpleFIN — each with a contract fake, connect flow, grants and registered action types.
+
 ## Session 6 update (2026-09-30): full speech, research headroom, UI refinement
 - **Speech cut off ~80% through:**
   - Cause: the spoken text was cut at 900 characters and the TTS endpoint capped input at 700.
