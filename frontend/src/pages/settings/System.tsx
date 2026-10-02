@@ -251,6 +251,32 @@ function BrainCard() {
                 onKeyUp={(e) => void api.setResearch({ max_searches: Number(e.currentTarget.value) })}
               />
             </label>
+            <label className="field">
+              <span>Thinking depth</span>
+              <select
+                value={b.effort ?? 'auto'}
+                onChange={(e) => {
+                  void api.setResearch({ effort: e.target.value });
+                  brain.setData({ ...b, effort: e.target.value });
+                }}
+              >
+                <option value="auto">Automatic: quick for everyday asks, deeper for research (recommended)</option>
+                <option value="low">Fastest</option>
+                <option value="medium">Balanced</option>
+                <option value="high">Deepest (slowest)</option>
+              </select>
+            </label>
+            <label className="toggle-inline">
+              <input
+                type="checkbox"
+                checked={!!b.fast_mode}
+                onChange={async (e) => {
+                  await api.setResearch({ fast_mode: e.target.checked });
+                  brain.setData({ ...b, fast_mode: e.target.checked });
+                }}
+              />{' '}
+              Fast mode: answers stream up to about 2.5x faster, and model calls cost 2x
+            </label>
           </>
         )}
       </Async>

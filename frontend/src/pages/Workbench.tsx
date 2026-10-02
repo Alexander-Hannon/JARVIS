@@ -7,11 +7,42 @@ import { useAsync } from '../lib/hooks';
 
 /* The sandbox, made visible: its screen, every command it ran, its internet window, and your skills. */
 
-function Screen({ shot }: { shot: string | null }) {
+/* Live view: a fresh capture of the sandbox desktop every 2 s while it runs; the last stored screen otherwise. */
+function Screen({ shot, running }: { shot: string | null; running: boolean }) {
+  const [tick, setTick] = useState(0);
+  const [live, setLive] = useState<string | null>(null);
+  useEffect(() => {
+    if (!running) return;
+    const t = window.setInterval(() => setTick((n) => n + 1), 2000);
+    return () => window.clearInterval(t);
+  }, [running]);
+  useEffect(() => {
+    if (!running) {
+      setLive(null);
+      return;
+    }
+    let url: string | null = null;
+    let gone = false;
+    fetch(`/api/sandbox/live.png?t=${tick}`, { credentials: 'same-origin' })
+      .then((r) => (r.status === 200 ? r.blob() : null))
+      .then((b) => {
+        if (!b || gone) return;
+        url = URL.createObjectURL(b);
+        setLive((old) => {
+          if (old) URL.revokeObjectURL(old);
+          return url;
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      gone = true;
+    };
+  }, [tick, running]);
+  const src = live ?? (shot ? `/api/sandbox/shots/${shot}` : null);
   return (
     <figure className="sbx-screen">
-      {shot ? <img src={`/api/sandbox/shots/${shot}`} alt="Latest sandbox screen" /> : <div className="sbx-blank">No screen captured yet</div>}
-      <figcaption className="small muted">Latest view of the sandbox. It refreshes while JARVIS works.</figcaption>
+      {src ? <img src={src} alt="Sandbox screen" /> : <div className="sbx-blank">{running ? 'Connecting to the sandbox screen…' : 'The sandbox is stopped. Start it, or ask JARVIS to use it.'}</div>}
+      <figcaption className="small muted">{live ? 'Live view of the sandbox desktop.' : 'Last captured view.'}</figcaption>
     </figure>
   );
 }
@@ -127,7 +158,7 @@ export function WorkbenchPage() {
           <div className="wb-grid">
             <section className="wb-main">
               {s.available ? (
-                <Screen shot={s.latest_shot} />
+                <Screen shot={s.latest_shot} running={!!s.running} />
               ) : (
                 <div className="sbx-setup">
                   <h2>Set up the sandbox</h2>

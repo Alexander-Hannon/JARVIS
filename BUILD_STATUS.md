@@ -1,5 +1,29 @@
 # BUILD_STATUS
 
+## Session 8 update (2026-10-01): V4.1 — feed-native sandbox, speed, Today polish
+From AJ's first real use of V4:
+- **Sandbox task never finished:** JARVIS asked to open espn.com/rolltide.com, AJ approved, the window opened — and
+  nothing resumed (the agent's turn had ended at the approval). Now an approved sandbox network window automatically
+  resumes the task in the same Command feed (once). That's also why no screen was ever captured.
+- **Sandbox in the main feed:** replies include a Sandbox card (commands + output, desktop action count, latest
+  screen); while JARVIS works, the "working" bubble shows the live sandbox screen. Workbench shows a live capture of the
+  desktop every 2 s while the sandbox runs (`/api/sandbox/live.png`, not stored).
+- **Speed** (measured before: model calls avg 14.5 s, worst 107 s; 1 question ran 11 searches / 110 s):
+  - Agent steps are streamed: web searches and page reads appear as they happen instead of in a burst at the end.
+  - Effort per request: everyday asks run at low effort, research/writing/sandbox at medium (Settings → Budget →
+    JARVIS brain → Thinking depth to pin it).
+  - Tools for connected apps (and the sandbox when Docker is up) load up front — no ~5 s tool-search step each.
+  - Prompt: usually 1–3 searches, stop once the answer is solid.
+  - Worker polls every 1 s (was 5 s) so approved actions start almost immediately; Telegram poll throttled to 3 s.
+  - Optional **fast mode** (Settings, off by default): Opus fast output, billed 2x in the budget ledger, automatic
+    fallback to standard speed if fast capacity is throttled.
+  - Streaming hasn't been exercised against the live API in tests (no spend without approval); a defensive fallback to
+    the unstreamed call keeps commands working if the SDK's stream helper ever disagrees.
+- **Today:** heads-up cards are compact lists (deadline title, course, day; "16 deadlines this week, 5 due tomorrow")
+  instead of a run-on paragraph; cards no longer stretch to equal heights.
+- **Tests:** backend 337 passed (+7: effort routing, up-front tools, streamed progress + billing, fast-mode fallback,
+  inline sandbox card, live view, deadline parsing); UI (mocked) 17 passed (+2: inline sandbox card, auto-resume once).
+
 ## Session 7 update (2026-10-01): JARVIS V4 — M0 foundations
 Plan approved by AJ: V4 "Operator" (native sandboxed OpenClaw-style powers, all four integration families, MCP client,
 tiered autonomy). Milestones M0 → M4; this session landed **M0**.
