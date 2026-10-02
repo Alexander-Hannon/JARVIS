@@ -44,17 +44,26 @@ function PlanEditor({ plan, onSaved }: { plan: Plan | null; onSaved: (p: Plan) =
             <h3 className="subhead">Top 3 priorities</h3>
             {plan.priorities.length ? (
               <ol className="priorities">
-                {plan.priorities.slice(0, 3).map((p, i) => (
-                  <li key={i}>{p}</li>
+                {(plan.progress ?? plan.priorities.map((t) => ({ text: t, done: false }))).slice(0, 3).map((p, i) => (
+                  <li key={i} className={p.done ? 'done' : ''} data-testid={`priority-${i}`}>
+                    {p.done && <span className="done-mark" aria-label="Done">✓ </span>}
+                    {p.text}
+                  </li>
                 ))}
               </ol>
             ) : (
               <Empty>No priorities set.</Empty>
             )}
-            {plan.first_action && (
-              <p>
-                <span className="muted">First action:</span> {plan.first_action}
+            {plan.all_done ? (
+              <p className="plan-done" data-testid="plan-done">
+                All three done. Nice work. Ask JARVIS what's next, or set new priorities.
               </p>
+            ) : (
+              (plan.next_action ?? plan.first_action) && (
+                <p>
+                  <span className="muted">{plan.progress?.some((p) => p.done) ? 'Next:' : 'First action:'}</span> {plan.next_action ?? plan.first_action}
+                </p>
+              )
             )}
             <p className="muted small">
               Plan v{plan.version} · by {plan.author}

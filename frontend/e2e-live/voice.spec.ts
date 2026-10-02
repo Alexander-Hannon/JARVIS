@@ -21,6 +21,7 @@ test('replies are spoken automatically in the Jarvis voice', async ({ page }) =>
   await login(page);
   await page.goto('/console');
   const tts = page.waitForRequest((r) => r.url().endsWith('/api/voice/tts') && r.method() === 'POST', { timeout: 30000 });
+  if (!(await page.getByTestId('cmd-input').isVisible())) await page.getByTestId('type-toggle').click();
   await page.getByTestId('cmd-input').fill("what's the weather tomorrow");
   await page.getByTestId('send-btn').click();
   const req = await tts;

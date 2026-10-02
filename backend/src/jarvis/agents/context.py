@@ -199,6 +199,44 @@ def conflicts(events: list[dict]) -> list[str]:
     return out
 
 
+def _norm_task(text: str) -> str:
+    t = re.sub(r"\s*\((overdue|deadline today[^)]*)\)\s*$", "", text or "", flags=re.I)
+    return re.sub(r"\s+", " ", t).strip().lower()
+
+
+def completed_today(conn, d: date, tz: str, force: bool = False) -> dict[str, str]:
+    """Tasks finished today -> when. JARVIS's own completions count immediately (task_links); completions made directly
+    in Todoist come from its completed-tasks API. Positive evidence only: a plan line is never assumed done."""
+    start, end = (iso(x) for x in day_bounds(d, tz))
+    out: dict[str, str] = {}
+    for r in rows(conn, "SELECT content, updated_at FROM task_links WHERE status='completed' AND updated_at>=? AND updated_at<?",
+                  (start, end)):
+        out[_norm_task(r["content"])] = r["updated_at"]
+    try:
+        tp = A.task_provider(conn)
+        for t in _cached(f"done:{d}", lambda: tp.list_completed(start, end), force):
+            out.setdefault(_norm_task(t.content), t.updated_at or end)
+    except (A.NotConnected, ProviderError):
+        pass
+    return out
+
+
+def plan_progress(conn, plan: dict | None, d: date, tz: str, force: bool = False) -> dict | None:
+    """The accepted plan stays AJ's; progress is computed on read so the mission stays current as tasks get done."""
+    if not plan:
+        return None
+    done = completed_today(conn, d, tz, force)
+    items = [{"text": p if isinstance(p, str) else str(p), "done": _norm_task(p if isinstance(p, str) else str(p)) in done}
+             for p in plan.get("priorities") or []]
+    all_done = bool(items) and all(i["done"] for i in items)
+    nxt = next((i["text"] for i in items if not i["done"]), None)
+    first = plan.get("first_action")
+    # the written first action stands until the priority it points at is done; then the next open priority takes over
+    first_done = bool(first) and any(i["done"] and _norm_task(first).startswith(_norm_task(i["text"])) for i in items)
+    next_action = None if all_done else (first if first and not first_done else nxt)
+    return plan | {"progress": items, "all_done": all_done, "next_action": next_action}
+
+
 def today(conn, force: bool = False, d: date | None = None) -> dict:
     tz = user_tz(conn)
     d = d or local_today(conn)
@@ -209,7 +247,7 @@ def today(conn, force: bool = False, d: date | None = None) -> dict:
     dl = deadlines_snapshot(conn, d)
     evs = cal["events"]
     return {
-        "date": d.isoformat(), "tz": tz, "now": now_iso(), "plan": current_plan(conn, d),
+        "date": d.isoformat(), "tz": tz, "now": now_iso(), "plan": plan_progress(conn, current_plan(conn, d), d, tz, force),
         "agenda": evs, "tasks_due": due_today, "overdue": overdue, "deadlines": dl["items"],
         "conflicts": conflicts(evs),
         "work_windows": work_windows(evs, d, tz) if cal["status"] in ("ok", "partial") else [],

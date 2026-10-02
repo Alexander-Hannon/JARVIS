@@ -170,3 +170,34 @@ def test_deadline_heads_up_is_a_clean_list(conn):
     assert split_deadline("Ch 10 Mini Sim on Pricing [(MKT 601-01/601-01J Merged) (FA26) MARKETING STRATEGY & ANALYSIS]") == \
         ("Ch 10 Mini Sim on Pricing", "MKT 601")
     assert json.dumps(split_deadline("Assignment 4 [MSC 550-01]")) == '["Assignment 4", "MSC 550"]'
+
+
+# ------------------------------------------------------------------------------------------------ plan stays current
+def test_plan_progress_follows_completed_tasks(client, conn, fakes):
+    """AJ: 'make sure the mission remains up to date as tasks get completed'. Completions through JARVIS count at once;
+    completions made directly in Todoist count via its completed-tasks API; nothing is assumed done without evidence."""
+    from jarvis.agents import context
+    from jarvis.core.util import now_iso
+    client.put("/api/plan/today", {"mission": "Clear the grading backlog", "constraints": [],
+                             "priorities": ["Grade quizzes", "Email advisor", "Prep lab"],
+                             "first_action": "Grade quizzes — first open window 1:00 PM"})
+    plan = client.get("/api/today").json()["plan"]
+    assert [p["done"] for p in plan["progress"]] == [False, False, False]
+    assert plan["next_action"].startswith("Grade quizzes")
+    # completed through JARVIS (task_links)
+    conn.execute("INSERT INTO task_links (id, op_key, content, status, created_at, updated_at) VALUES "
+                 "('tl1', 'op1', 'Grade quizzes', 'completed', ?, ?)", (now_iso(), now_iso()))
+    context.invalidate()
+    plan = client.get("/api/today").json()["plan"]
+    assert [p["done"] for p in plan["progress"]] == [True, False, False] and plan["next_action"] == "Email advisor"
+    # completed directly in Todoist
+    tid = fakes["todoist"].external_create("Email advisor (overdue)")
+    fakes["todoist"].external_complete(tid)
+    context.invalidate()
+    plan = client.get("/api/today?refresh=true").json()["plan"]
+    assert [p["done"] for p in plan["progress"]] == [True, True, False] and plan["next_action"] == "Prep lab"
+    conn.execute("INSERT INTO task_links (id, op_key, content, status, created_at, updated_at) VALUES "
+                 "('tl2', 'op2', 'Prep lab', 'completed', ?, ?)", (now_iso(), now_iso()))
+    context.invalidate()
+    plan = client.get("/api/today").json()["plan"]
+    assert plan["all_done"] is True and plan["next_action"] is None

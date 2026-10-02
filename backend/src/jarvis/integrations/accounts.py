@@ -212,7 +212,8 @@ def is_simulated(adapter: Any) -> bool:
 
 # ---------- mail (Gmail rides on the Google account with purpose "gmail"; Outlook on the Microsoft account) ----------
 MAILBOXES = ("gmail", "outlook")
-_MAIL_ACCOUNT = {"gmail": ("google", "gmail"), "outlook": ("microsoft", "mail")}
+# Gmail has its own account row (it can be a different Google account than Calendar); Outlook rides on Microsoft.
+_MAIL_ACCOUNT = {"gmail": ("gmail", "mail"), "outlook": ("microsoft", "mail")}
 
 
 def mail_account(conn: sqlite3.Connection, box: str) -> dict | None:

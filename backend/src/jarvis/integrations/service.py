@@ -92,6 +92,7 @@ def google_setup_info() -> dict:
     from jarvis.integrations.google_oauth import CALENDAR_SCOPES, DRIVE_FILE_SCOPES, DRIVE_SCOPES
     s = get_settings()
     return {"configured": bool(s.google_client_id and s.google_client_secret), "redirect_uri": redirect_uri(),
+            "redirect_uris": redirect_uris(),
             "required_apis": ["Google Calendar API", "Google Drive API (only if using Drive)", "Gmail API (only if using Gmail)"],
             "scopes": {"calendar": CALENDAR_SCOPES, "drive": DRIVE_SCOPES, "gmail": GMAIL_SCOPES,
                        "drive_per_file_alternative": DRIVE_FILE_SCOPES},
@@ -99,7 +100,8 @@ def google_setup_info() -> dict:
                 "Google Cloud Console → create a project (personal account; no Workspace admin / domain-wide delegation).",
                 "APIs & Services → enable Google Calendar API (and Drive API if wanted).",
                 "OAuth consent screen → External, Testing mode, add your own Google account as a test user; add the scopes listed.",
-                "Credentials → Create OAuth client ID → Web application → Authorized redirect URI exactly: " + redirect_uri(),
+                "Credentials → Create OAuth client ID → Web application → add EACH of these Authorized redirect URIs: "
+                + ", ".join(redirect_uris()),
                 "Put JARVIS_GOOGLE_CLIENT_ID and JARVIS_GOOGLE_CLIENT_SECRET in .env (never commit), restart Jarvis, then Connect.",
             ],
             "drive_tradeoff": "drive.readonly lets Jarvis read files you select by ID/folder (Jarvis itself restricts reads to "
@@ -107,13 +109,31 @@ def google_setup_info() -> dict:
                               "arbitrary read access to existing files."}
 
 
-def redirect_uri() -> str:
+def redirect_uri(origin: str | None = None) -> str:
+    """OAuth callback on the address AJ is actually using (localhost or the Tailscale origin), so the provider sends the
+    browser back where the binding cookie lives. Only JARVIS's own allowed origins are honored; anything else falls back
+    to the configured default. Each address must be registered as a redirect URI with the provider."""
     s = get_settings()
-    base = s.public_origin or f"http://{'localhost' if s.host in ('127.0.0.1', 'localhost') else s.host}:{s.port}"
+    default = s.public_origin or f"http://{'localhost' if s.host in ('127.0.0.1', 'localhost') else s.host}:{s.port}"
+    base = default
+    if origin:
+        from jarvis.api.app import allowed_origins
+        o = origin.rstrip("/")
+        if o in allowed_origins() and not o.endswith(":5173"):     # the Vite dev server can't receive callbacks
+            base = o
     return base.rstrip("/") + "/api/integrations/google/callback"
 
 
-def google_start(conn, purpose: str) -> tuple[str, str]:
+def redirect_uris() -> list[str]:
+    """Every callback address AJ should register (one per way he opens JARVIS)."""
+    s = get_settings()
+    out = [f"http://localhost:{s.port}/api/integrations/google/callback"]
+    if s.public_origin:
+        out.append(s.public_origin.rstrip("/") + "/api/integrations/google/callback")
+    return out
+
+
+def google_start(conn, purpose: str, origin: str | None = None) -> tuple[str, str]:
     """Returns (auth_url, browser_binding). The caller sets the binding as a short-lived Lax cookie."""
     from jarvis.integrations.google_oauth import CALENDAR_SCOPES, DRIVE_SCOPES, build_auth_url, generate_pkce_pair
     s = get_settings()
@@ -124,7 +144,7 @@ def google_start(conn, purpose: str) -> tuple[str, str]:
     state = pysecrets.token_urlsafe(32)
     verifier, challenge = generate_pkce_pair()
     binding = pysecrets.token_urlsafe(32)
-    ru = redirect_uri()
+    ru = redirect_uri(origin)
     conn.execute("INSERT INTO oauth_states (state_hash, provider, purpose, code_verifier, redirect_uri, created_at, expires_at, "
                  "binding_hash) VALUES (?,?,?,?,?,?,?,?)",
                  (hashlib.sha256(state.encode()).hexdigest(), "google", purpose, verifier, ru, now_iso(),
@@ -152,6 +172,16 @@ def google_callback(conn, state: str, code: str | None, error: str | None, bindi
         info = fetch_userinfo(tokens["access_token"])
     except ProviderError as e:
         raise SetupError("token_exchange_failed", f"Google token exchange failed ({e.kind}).") from e
+    if st["purpose"] == "gmail":
+        # Gmail is its own account slot: it may be a different Google account (personal Gmail) than Calendar/Drive
+        # (school account), and connecting it must never replace or drop the Calendar account's grants.
+        prev = A.get_account(conn, "gmail")
+        if prev and prev["external_account_id"] == info.get("email") and not tokens.get("refresh_token"):
+            tokens["refresh_token"] = json.loads(A.read_secret(prev) or "{}").get("refresh_token")
+        aid = A.upsert_account(conn, "gmail", info.get("email") or "Gmail", json.dumps(tokens), "oauth_tokens",
+                               external_account_id=info.get("email"), scopes=(tokens.get("scope") or "").split(),
+                               config={"purposes": ["mail"]})
+        return integration_view(conn, aid)
     existing = A.get_account(conn, "google")
     purposes = set(existing["config"].get("purposes", [])) if existing and existing["external_account_id"] == info.get("email") else set()
     purposes.add(st["purpose"])
@@ -331,8 +361,8 @@ def connect_anthropic(conn, key: str) -> dict:
 
 
 # ------------------------------------------------------------------ Microsoft (Outlook mail)
-def microsoft_redirect_uri() -> str:
-    return redirect_uri().replace("/google/callback", "/microsoft/callback")
+def microsoft_redirect_uri(origin: str | None = None) -> str:
+    return redirect_uri(origin).replace("/google/callback", "/microsoft/callback")
 
 
 def microsoft_setup_info() -> dict:
@@ -351,7 +381,7 @@ def microsoft_setup_info() -> dict:
             ]}
 
 
-def microsoft_start(conn, purpose: str = "mail", with_send: bool = False) -> tuple[str, str]:
+def microsoft_start(conn, purpose: str = "mail", with_send: bool = False, origin: str | None = None) -> tuple[str, str]:
     from jarvis.integrations.google_oauth import generate_pkce_pair
     from jarvis.integrations.microsoft import MAIL_SCOPES, SEND_SCOPE, build_auth_url
     s = get_settings()
@@ -362,7 +392,7 @@ def microsoft_start(conn, purpose: str = "mail", with_send: bool = False) -> tup
     state = pysecrets.token_urlsafe(32)
     verifier, challenge = generate_pkce_pair()
     binding = pysecrets.token_urlsafe(32)
-    ru = microsoft_redirect_uri()
+    ru = microsoft_redirect_uri(origin)
     conn.execute("INSERT INTO oauth_states (state_hash, provider, purpose, code_verifier, redirect_uri, created_at, expires_at, "
                  "binding_hash) VALUES (?,?,?,?,?,?,?,?)",
                  (hashlib.sha256(state.encode()).hexdigest(), "microsoft", purpose + ("+send" if with_send else ""), verifier,
@@ -436,7 +466,7 @@ def list_integrations(conn) -> list[dict]:
                                                               "ORDER BY provider")]
     present = {o["provider"] for o in out}
     s = get_settings()
-    for p in ("todoist", "google", "microsoft", "ics", "github", "anthropic"):
+    for p in ("todoist", "google", "gmail", "microsoft", "ics", "github", "anthropic"):
         if p not in present:
             out.append({"provider": p, "account_id": None, "status": "not_connected", "label": None, "scopes": [], "grants": [],
                         "last_sync_at": None, "last_error": None, "live_verified": False,

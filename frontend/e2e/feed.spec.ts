@@ -7,6 +7,7 @@ import { commandResponse, item, proposal, setupApp } from './mockApi';
 const PNG = readFileSync(new URL('../public/icon-192.png', import.meta.url));
 
 async function sendTyped(page: Page, text: string) {
+  if (!(await page.getByTestId('cmd-input').isVisible())) await page.getByTestId('type-toggle').click(); // voice-first default
   await page.getByTestId('cmd-input').fill(text);
   await page.getByTestId('send-btn').click();
 }
@@ -67,4 +68,37 @@ test('approving sandbox internet access resumes the task in the same feed', asyn
   expect(second.text).toBe('Sandbox internet access to espn.com, rolltide.com is approved and open. Continue the task you were doing.');
   await page.waitForTimeout(1500);
   expect(api.callsTo('POST', '/api/commands')).toHaveLength(2); // resumes exactly once
+});
+
+test('voice first: the keyboard is hidden until toggled, and the choice is remembered', async ({ page }) => {
+  await setupApp(page);
+  await page.goto('/console');
+  await expect(page.getByTestId('record-btn')).toBeVisible();
+  await expect(page.getByTestId('cmd-input')).toHaveCount(0);
+  await page.getByTestId('type-toggle').click();
+  await expect(page.getByTestId('cmd-input')).toBeFocused();
+  await page.reload();
+  await expect(page.getByTestId('cmd-input')).toBeVisible();
+  await page.getByTestId('type-toggle').click();
+  await expect(page.getByTestId('cmd-input')).toHaveCount(0);
+});
+
+test('sandbox steps read in plain language; raw commands stay folded', async ({ page }) => {
+  const api = await setupApp(page);
+  api.on('POST', '/api/commands', () => ({
+    json: {
+      ...commandResponse(null, 'Frontier flies there from Huntsville.'),
+      visuals: [{ type: 'sandbox', shot_id: null, network: { active: true, domains: ['flyfrontier.com'], until: null }, desktop_actions: 0,
+        steps: [{ kind: 'browse', summary: 'Opened flyfrontier.com/where-we-fly', detail: 'https://www.flyfrontier.com/where-we-fly/', exit_code: null, output: '', ms: 900 },
+                { kind: 'exec', summary: 'Wrote a script', detail: "cat > /workspace/f.py <<'EOF' from playwright", exit_code: 0, output: 'None origin', ms: 20 }] }],
+    },
+  }));
+  await page.goto('/console');
+  await sendTyped(page, 'find me flights');
+  const card = page.getByTestId('viz-sandbox');
+  await expect(card.getByText('Opened flyfrontier.com/where-we-fly')).toBeVisible();
+  await expect(card.getByText('Wrote a script')).toBeVisible();
+  await expect(card.getByText('cat > /workspace/f.py', { exact: false })).toBeHidden();
+  await card.getByText('Technical details').click();
+  await expect(card.getByText('cat > /workspace/f.py', { exact: false })).toBeVisible();
 });

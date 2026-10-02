@@ -252,6 +252,10 @@ export interface SourceInfo {
 export interface Plan {
   mission: string;
   priorities: string[];
+  /** Live progress: a priority is done when a matching task was completed today (computed on read). */
+  progress?: { text: string; done: boolean }[];
+  next_action?: string | null;
+  all_done?: boolean;
   constraints: string[];
   first_action: string | null;
   version: number;
@@ -452,6 +456,7 @@ export interface Integration {
 export interface GoogleSetup {
   configured: boolean;
   redirect_uri: string;
+  redirect_uris?: string[];
   required_apis: string[];
   scopes: { calendar: string[]; drive: string[]; gmail?: string[] };
 }
