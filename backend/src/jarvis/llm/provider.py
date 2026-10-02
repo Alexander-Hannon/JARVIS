@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 from jarvis.config import get_settings
+from jarvis.core.db import jload, row
 from jarvis.core.util import record_latency
 from jarvis.llm import budget
 
@@ -135,10 +136,31 @@ class AnthropicProvider(LLMProvider):
         return {"text": text, "data": data, "usage": usage, "model": model, "request_id": getattr(resp, "_request_id", None)}
 
 
+def _progress(conn, run_id: str | None, blk) -> None:
+    """Report a server-side tool call the moment it completes (while the model keeps working)."""
+    if not run_id:
+        return
+    from jarvis.core.util import run_event
+    name = getattr(blk, "name", "")
+    inp = getattr(blk, "input", None) or {}
+    if name == "web_search":
+        run_event(conn, run_id, "tool", f"Searching the web: {inp.get('query') or '…'}")
+    elif name == "web_fetch":
+        run_event(conn, run_id, "tool", f"Reading {inp.get('url') or 'a web page'}")
+    else:
+        run_event(conn, run_id, "tool", "Looking up the right tool")
+
+
+def fast_mode_enabled(conn) -> bool:
+    data = jload((row(conn, "SELECT data FROM user_settings WHERE id=1") or {}).get("data"), {}) or {}
+    return bool((data.get("research") or {}).get("fast_mode"))
+
+
 def _agent_step_anthropic(self, conn, *, system, messages, tools, max_tokens=4000, effort=None, run_id=None,
                           max_web_searches=0, scheduled=False) -> dict:
-    """One model step of the agent loop. Returns {"content": [blocks], "stop_reason", "usage", "model"}.
-    Content blocks are returned as the SDK objects so thinking/server-tool blocks round-trip unchanged."""
+    """One model step of the agent loop, STREAMED so progress (web searches, page reads) shows up as it happens.
+    Returns {"content": [blocks], "stop_reason", "usage", "model", "progress_emitted": True}. Content blocks are the
+    SDK objects so thinking/server-tool blocks round-trip unchanged."""
     import anthropic
 
     key = _api_key(conn)
@@ -148,16 +170,37 @@ def _agent_step_anthropic(self, conn, *, system, messages, tools, max_tokens=400
     model = _model_for(conn, "agent")
     max_tokens = min(max_tokens, max(2000, int(b.get("max_output_tokens") or 4000)))
     est_in = sum(len(str(m.get("content"))) for m in messages) // 3 + len(system) // 3 + 2500
+    fast = fast_mode_enabled(conn)
     try:
-        res_id = budget.reserve(conn, "agent", model, est_in, max_tokens, scheduled, run_id, max_web_searches=max_web_searches)
+        res_id = budget.reserve(conn, "agent", model, est_in, max_tokens, scheduled, run_id, max_web_searches=max_web_searches,
+                                multiplier=budget.FAST_MODE_MULT if fast else 1.0)
     except budget.BudgetBlocked as e:
         raise LLMError("budget", e.message) from e
-    client = anthropic.Anthropic(api_key=key, max_retries=1, timeout=120.0)
+    client = anthropic.Anthropic(api_key=key, max_retries=1, timeout=180.0)
     t = time.perf_counter()
+    # Automatic prompt caching: tool definitions + system + prior steps are re-read at ~10% cost within a command.
+    params = dict(model=model, max_tokens=max_tokens, system=system, messages=messages, tools=tools,
+                  output_config={"effort": effort or "medium"}, cache_control={"type": "ephemeral"})
+
+    def go(use_fast: bool):
+        api = client.beta.messages if use_fast else client.messages
+        extra = {"speed": "fast", "betas": ["fast-mode-2026-02-01"]} if use_fast else {}
+        with api.stream(**params, **extra) as stream:
+            for ev in stream:
+                if ev.type == "content_block_stop" and getattr(ev.content_block, "type", "") == "server_tool_use":
+                    _progress(conn, run_id, ev.content_block)
+            return stream.get_final_message()
     try:
-        # Automatic prompt caching: tool definitions + system + prior steps are re-read at ~10% cost within a command.
-        resp = client.messages.create(model=model, max_tokens=max_tokens, system=system, messages=messages, tools=tools,
-                                      output_config={"effort": effort or "medium"}, cache_control={"type": "ephemeral"})
+        try:
+            resp = go(fast)
+        except anthropic.RateLimitError:
+            if not fast:
+                raise
+            resp = go(False)            # fast-mode capacity is separate; fall back to standard speed once
+        except (TypeError, AttributeError, KeyError):
+            # Defensive: if the SDK's streaming helper ever disagrees with this code, answer unstreamed rather than fail.
+            log.exception("streamed agent step failed; retrying without streaming")
+            resp = client.messages.create(**params)
     except anthropic.AuthenticationError as e:
         budget.release(conn, res_id)
         raise LLMError("auth", "Anthropic API key was rejected.") from e
@@ -175,8 +218,10 @@ def _agent_step_anthropic(self, conn, *, system, messages, tools, max_tokens=400
         raise LLMError("network", "Could not reach the model provider.") from e
     usage = resp.usage.model_dump() if hasattr(resp.usage, "model_dump") else dict(resp.usage)
     budget.reconcile(conn, res_id, model, usage, getattr(resp, "_request_id", None))
-    record_latency(conn, "model_call", (time.perf_counter() - t) * 1000, {"purpose": "agent", "model": model})
-    return {"content": list(resp.content), "stop_reason": resp.stop_reason, "usage": usage, "model": model}
+    record_latency(conn, "model_call", (time.perf_counter() - t) * 1000, {"purpose": "agent", "model": model,
+                                                                        "effort": effort or "medium", "fast": fast})
+    return {"content": list(resp.content), "stop_reason": resp.stop_reason, "usage": usage, "model": model,
+            "progress_emitted": True}
 
 
 AnthropicProvider.agent_step = _agent_step_anthropic

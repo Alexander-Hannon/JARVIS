@@ -67,7 +67,44 @@ export interface ScreenshotVisual {
   title?: string | null;
   url?: string | null;
 }
-export type Visual = CalendarVisual | WeatherVisual | TasksVisual | SlotsVisual | InboxVisual | ScreenshotVisual;
+export interface SandboxVisual {
+  type: 'sandbox';
+  shot_id: string | null;
+  network: { active: boolean; domains: string[]; until: string | null };
+  steps: { kind: string; detail: string; exit_code: number | null; output: string; ms: number | null }[];
+  desktop_actions: number;
+}
+export type Visual = CalendarVisual | WeatherVisual | TasksVisual | SlotsVisual | InboxVisual | ScreenshotVisual | SandboxVisual;
+
+export function SandboxCard({ v }: { v: SandboxVisual }) {
+  return (
+    <div className="viz viz-sandbox" data-testid="viz-sandbox">
+      <div className="viz-head">
+        Sandbox{' '}
+        <span className="muted small">
+          {v.network.active ? `online to ${v.network.domains.join(', ')}` : 'offline'}
+          {v.desktop_actions ? `, ${v.desktop_actions} desktop action${v.desktop_actions === 1 ? '' : 's'}` : ''}
+        </span>
+      </div>
+      {v.shot_id && (
+        <a href={`/api/sandbox/shots/${v.shot_id}`} target="_blank" rel="noreferrer" title="Open full size">
+          <img className="sbx-inline-shot" src={`/api/sandbox/shots/${v.shot_id}`} alt="Sandbox screen after JARVIS worked" />
+        </a>
+      )}
+      {v.steps.length > 0 && (
+        <ol className="plain sbx-log">
+          {v.steps.map((st, i) => (
+            <li key={i}>
+              <code>{st.kind === 'exec' ? `$ ${st.detail}` : `${st.kind}: ${st.detail}`}</code>
+              {st.exit_code !== null && st.exit_code !== 0 && <span className="bad-text small"> exit {st.exit_code}</span>}
+              {st.output && st.kind === 'exec' && <pre className="sbx-out">{st.output}</pre>}
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
 
 export const MAIL_CATEGORY: Record<string, string> = {
   needs_reply: 'Needs reply',
@@ -354,7 +391,9 @@ export function InboxCard({ v }: { v: InboxVisual }) {
 
 export function Visuals({ items }: { items?: Visual[] | null }) {
   if (!items?.length) return null;
-  const order = { weather: 0, calendar: 1, slots: 2, inbox: 3, tasks: 4 } as Record<string, number>;
+  const order = { sandbox: -1, weather: 0, calendar: 1, slots: 2, inbox: 3, tasks: 4 } as Record<string, number>;
+  // the sandbox card already shows the latest screen; skip a duplicate browser screenshot card
+  if (items.some((v) => v.type === 'sandbox' && v.shot_id)) items = items.filter((v) => v.type !== 'screenshot');
   return (
     <div className="viz-wrap">
       {[...items]
@@ -370,6 +409,8 @@ export function Visuals({ items }: { items?: Visual[] | null }) {
             <SlotsCard key={i} v={v} />
           ) : v.type === 'inbox' ? (
             <InboxCard key={i} v={v} />
+          ) : v.type === 'sandbox' ? (
+            <SandboxCard key={i} v={v} />
           ) : v.type === 'screenshot' ? (
             <figure key={i} className="viz viz-shot">
               <div className="viz-head">

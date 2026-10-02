@@ -104,11 +104,13 @@ def run_once(conn, worker_id: str, max_jobs: int = 20) -> int:
 def maybe_periodic(conn, last: dict) -> None:
     """Low-frequency data refresh — no model calls, no polling agents."""
     now = time.monotonic()
-    from jarvis.channels import telegram
-    try:
-        telegram.poll(conn)            # outbound short-poll; only does work when a bot is connected
-    except Exception:  # noqa: BLE001 — channel trouble must not stop the worker
-        log.exception("telegram poll failed")
+    if now - last.get("tg", 0) > 3:
+        last["tg"] = now
+        from jarvis.channels import telegram
+        try:
+            telegram.poll(conn)            # outbound short-poll; only does work when a bot is connected
+        except Exception:  # noqa: BLE001 — channel trouble must not stop the worker
+            log.exception("telegram poll failed")
     from jarvis.integrations import accounts as A
     if now - last.get("ics", 0) > 3600 and A.get_account(conn, "ics"):
         jobs.enqueue(conn, "ics_refresh", {}, dedupe_key=f"ics:{int(time.time() // 3600)}")
@@ -129,7 +131,7 @@ def maybe_periodic(conn, last: dict) -> None:
         last["todoist"] = now
 
 
-def main(poll_seconds: float = 5.0) -> None:
+def main(poll_seconds: float = 1.0) -> None:   # 1 s: approved actions start almost immediately
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     from jarvis.logsafe import configure
     configure()

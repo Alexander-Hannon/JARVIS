@@ -84,7 +84,8 @@ HOW TO WORK
   handle each one. Questions get answers. Research gets researched. Only create task proposals when AJ asks you to add,
   track, or remind him of something — never turn questions, research or chit-chat into tasks.
 - Use web_search / web_fetch for anything current or factual you don't know (news, prices, how-tos, places, hours,
-  sports, definitions). Cite the sites you used by name. Prefer a couple of good sources over many.
+  sports, definitions). Cite the sites you used by name. Be quick: usually 1–3 searches; stop as soon as you have a
+  solid answer, and don't re-search the same thing with slightly different words. Speed matters — AJ is waiting.
 - Use AJ's own data tools (calendar, tasks, deadlines, memory, documents) instead of guessing.
 - More tools exist than are listed up front (email and other connected apps). If AJ asks about something you have no
   listed tool for, search for a tool before saying you can't.
@@ -183,6 +184,23 @@ class AgentRun:
 
 
 # ------------------------------------------------------------------------------------------------ loop
+DEEP = re.compile(r"\b(research|look (it |this )?up|find out|compare|analy[sz]e|why|explain|investigate|plan my|"
+                  r"draft|write|summari[sz]e|odds|statistics?|record|history of|workbench|sandbox|browser|code|script|"
+                  r"spreadsheet|csv|chart|debrief|war room|week)\b", re.I)
+
+
+def choose_effort(conn, inp, scope: Scope) -> str:
+    """Speed vs depth per request. Quick everyday asks ("what's on tomorrow", "add a task") run at low effort; research,
+    writing, analysis, sandbox work and anything long or with attachments get medium. AJ can pin it in Settings."""
+    data = jload((row(conn, "SELECT data FROM user_settings WHERE id=1") or {}).get("data"), {}) or {}
+    pinned = (data.get("research") or {}).get("effort", "auto")
+    if pinned in ("low", "medium", "high"):
+        return pinned
+    if scope.scheduled or inp.attachments or len(inp.text) > 260 or DEEP.search(inp.text):
+        return "medium"
+    return "low"
+
+
 def available(conn) -> tuple[bool, str]:
     p = get_provider()
     if not hasattr(p, "agent_step"):
@@ -223,6 +241,7 @@ def run(conn, inp, reply, run_id: str, specialists: list[str], scope: Scope = CO
     user_content.append({"type": "text", "text": inp.text})
     messages = _history(conn, inp.conversation_id, inp.text) + [{"role": "user", "content": user_content}]
     tools = T.schemas(conn, scope.allows) + (server_tools(conn) if scope.web else []) + computer_tools(conn, scope)
+    effort = choose_effort(conn, inp, scope)
     run_event(conn, run_id, "route", "Thinking about what you need")
     t0 = time.monotonic()
     final_text, tool_calls, web_searches = "", 0, 0
@@ -241,10 +260,12 @@ def run(conn, inp, reply, run_id: str, specialists: list[str], scope: Scope = CO
                 run_event(conn, run_id, "status", f"Stopped at the ${scope.max_cost_usd:.2f} run budget")
                 break
         resp = llm.agent_step(conn, system=system, messages=messages, tools=tools, max_tokens=6000, run_id=run_id,
-                              max_web_searches=search_limit(conn), scheduled=scope.scheduled)
+                              max_web_searches=search_limit(conn), scheduled=scope.scheduled, effort=effort)
         content = resp["content"]
         for b in content:
-            if _bt(b, "type") == "server_tool_use":
+            if _bt(b, "type") == "server_tool_use" and _bt(b, "name") == "web_search":
+                web_searches += 1 if resp.get("progress_emitted") else 0
+            if _bt(b, "type") == "server_tool_use" and not resp.get("progress_emitted"):   # streamed steps already reported
                 inp_ = _bt(b, "input") or {}
                 q = inp_.get("query") if isinstance(inp_, dict) else None
                 u = inp_.get("url") if isinstance(inp_, dict) else None
@@ -292,6 +313,9 @@ def run(conn, inp, reply, run_id: str, specialists: list[str], scope: Scope = CO
     specialists += sorted({_family(t) for t in ar.tools_used} | ({"research"} if web_searches else set())) or ["chief"]
     reply.say(final_text or "Done.")
     reply.citations += ar.citations
+    sbx = sandbox_visual(conn, run_id)
+    if sbx:
+        ar.visuals["sandbox"] = sbx
     reply.visuals += list(ar.visuals.values())
     if ar.specs:
         from jarvis.agents.chief import _new_proposal
@@ -335,11 +359,28 @@ def computer_result(conn, run_id: str, b: Any, failed_before: bool, over_limit: 
     except (SB.SandboxError, KeyError, ValueError, TypeError) as e:
         return res | {"content": f"Error: {getattr(e, 'message', None) or type(e).__name__}", "is_error": True}, True
     if name in ("screenshot", "zoom"):
-        run_event(conn, run_id, "tool", "Looking at the sandbox screen")
+        run_event(conn, run_id, "tool", "Looking at the sandbox screen", {"shot_id": out.get("shot_id")} if out.get("shot_id") else None)
         return res | {"content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png",
                                                                 "data": base64.b64encode(out["image"]).decode()}}]}, False
     run_event(conn, run_id, "tool", f"Sandbox desktop: {name.replace('_', ' ')}")
     return res | {"content": out.get("text") or "OK"}, False
+
+
+def sandbox_visual(conn, run_id: str) -> dict | None:
+    """What the sandbox did during this run, shown inline in the feed (no need to open the Workbench)."""
+    steps = rows(conn, "SELECT kind, detail, exit_code, output, duration_ms FROM sandbox_runs WHERE run_id=? "
+                       "ORDER BY created_at, rowid", (run_id,))
+    shots = [jload(e["data"], {}).get("shot_id") for e in rows(conn, "SELECT data FROM run_events WHERE run_id=? "
+                                                                    "AND data LIKE '%shot_id%' ORDER BY id", (run_id,))]
+    shots = [s for s in shots if s]
+    if not steps and not shots:
+        return None
+    from jarvis.sandbox import service as SB
+    return {"type": "sandbox", "shot_id": shots[-1] if shots else None, "network": SB.network(conn),
+            "steps": [{"kind": s["kind"], "detail": s["detail"][:300], "exit_code": s["exit_code"],
+                       "output": (s["output"] or "")[:600], "ms": s["duration_ms"]}
+                      for s in steps if s["kind"] != "computer"][-8:],
+            "desktop_actions": sum(1 for s in steps if s["kind"] == "computer")}
 
 
 def _family(tool: str) -> str:

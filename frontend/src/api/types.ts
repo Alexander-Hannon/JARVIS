@@ -637,6 +637,7 @@ export interface HeadsUpCard {
   tone: 'attention' | 'warn' | 'info';
   title: string;
   detail: string;
+  items?: { title: string; meta?: string | null; when?: string }[];
   link: string;
 }
 export interface WeeklyReport {

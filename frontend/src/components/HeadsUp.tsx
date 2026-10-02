@@ -14,7 +14,18 @@ export function HeadsUp() {
       {cards.map((c, i) => (
         <Link key={`${c.kind}-${i}`} to={c.link} className={`hu hu-${c.tone}`}>
           <strong>{c.title}</strong>
-          <span>{c.detail}</span>
+          {c.detail && <span className="hu-detail">{c.detail}</span>}
+          {c.items && c.items.length > 0 && (
+            <ul className="hu-items">
+              {c.items.map((it, k) => (
+                <li key={k}>
+                  <span className="hu-title">{it.title}</span>
+                  {it.meta && <span className="hu-meta">{it.meta}</span>}
+                  {it.when && <span className="hu-when">{it.when}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
         </Link>
       ))}
     </section>

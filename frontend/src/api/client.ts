@@ -256,10 +256,10 @@ export const api = {
   budget: () => request<T.Budget>('/api/budget'),
   weather: () => request<import('../components/Visuals').WeatherVisual>('/api/weather'),
   brain: () =>
-    request<{ mode: 'v2_agent' | 'offline'; reason: string | null; web_research: boolean; max_searches: number; model: string; tools: string[]; notes: string; assistant_name?: string }>(
+    request<{ mode: 'v2_agent' | 'offline'; reason: string | null; web_research: boolean; max_searches: number; model: string; tools: string[]; notes: string; assistant_name?: string; fast_mode?: boolean; effort?: string }>(
       '/api/brain',
     ),
-  setResearch: (research: { web_enabled?: boolean; max_searches?: number }) =>
+  setResearch: (research: { web_enabled?: boolean; max_searches?: number; fast_mode?: boolean; effort?: string }) =>
     request<unknown>('/api/settings', { method: 'PATCH', json: { research } }),
   patchBudget: (b: Partial<T.Budget>) => request<T.Budget>('/api/budget', { method: 'PATCH', json: b }),
   doctor: () => request<{ checks: T.DoctorCheck[] }>('/api/doctor'),

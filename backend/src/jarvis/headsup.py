@@ -5,8 +5,9 @@ Cards: pending approvals, calendar conflicts, deadlines in the next 48 h, leave-
 """
 from __future__ import annotations
 
+import re
 import time
-from datetime import timedelta
+from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
 from jarvis.agents import context as ctx
@@ -56,6 +57,22 @@ def _leave_by(conn, snap: dict) -> dict | None:
     return {"event": nxt["summary"], "location": key, "drive_minutes": minutes, "leave_at": iso(leave)}
 
 
+COURSE = re.compile(r"\b([A-Z]{2,4})[ -]?(\d{3})")
+
+
+def split_deadline(summary: str) -> tuple[str, str | None]:
+    """Canvas feed titles look like 'Title [(MKT 601-01/601-01J Merged) (FA26) LONG NAME]' -> ('Title', 'MKT 601')."""
+    m = re.match(r"^(.*?)\s*\[(.*)\]\s*$", summary or "")
+    title, bracket = (m.group(1), m.group(2)) if m else (summary or "", "")
+    c = COURSE.search(bracket) or COURSE.search(summary or "")
+    return title.strip() or (summary or "").strip(), f"{c.group(1)} {c.group(2)}" if c else None
+
+
+def day_label(d: date, today: date) -> str:
+    n = (d - today).days
+    return "today" if n == 0 else "tomorrow" if n == 1 else d.strftime("%a")
+
+
 def cards(conn) -> list[dict]:
     snap = ctx.today(conn)
     tz = ZoneInfo(snap["tz"])
@@ -73,12 +90,23 @@ def cards(conn) -> list[dict]:
         out.append({"kind": "leave_by", "tone": "attention", "title": f"Leave by {at} for {lb['event']}",
                     "detail": f"About {round(lb['drive_minutes'])} min to {lb['location']} (no live traffic; buffer added)",
                     "link": "/"})
-    for c in snap["conflicts"][:2]:
-        out.append({"kind": "conflict", "tone": "warn", "title": "Calendar conflict", "detail": str(c), "link": "/"})
-    soon = [d for d in snap["deadlines"]][:3]
-    if soon:
-        out.append({"kind": "deadlines", "tone": "info", "title": f"{len(snap['deadlines'])} deadline(s) coming up",
-                    "detail": "; ".join(f"{d['summary']} ({d['local_date']})" for d in soon), "link": "/missions"})
+    if snap["conflicts"]:
+        n = len(snap["conflicts"])
+        out.append({"kind": "conflict", "tone": "warn", "title": "Calendar conflict" if n == 1 else f"{n} calendar conflicts",
+                    "detail": "", "items": [{"title": str(c).replace("'", "")} for c in snap["conflicts"][:3]], "link": "/"})
+    if snap["deadlines"]:
+        today = date.fromisoformat(snap["date"])
+        dls = snap["deadlines"]
+        items = []
+        for d in dls[:4]:
+            title, course = split_deadline(d["summary"])
+            items.append({"title": title, "meta": course, "when": day_label(date.fromisoformat(d["local_date"]), today)})
+        first = date.fromisoformat(dls[0]["local_date"])
+        due_first = sum(1 for d in dls if d["local_date"] == dls[0]["local_date"])
+        out.append({"kind": "deadlines", "tone": "info",
+                    "title": f"{len(dls)} deadline{'s' if len(dls) != 1 else ''} this week",
+                    "detail": f"{due_first} due {day_label(first, today)}" + (f", {len(dls) - 4} more later" if len(dls) > 4 else ""),
+                    "items": items, "link": "/missions"})
     try:
         m = _mail(conn)
     except Exception:  # noqa: BLE001

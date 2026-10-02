@@ -69,7 +69,7 @@ def spent(conn, since: str) -> tuple[float, float]:
 
 
 def reserve(conn: sqlite3.Connection, purpose: str, model: str, est_input_tokens: int, max_output_tokens: int,
-            scheduled: bool = False, run_id: str | None = None, max_web_searches: int = 0) -> str:
+            scheduled: bool = False, run_id: str | None = None, max_web_searches: int = 0, multiplier: float = 1.0) -> str:
     with tx(conn):
         b = budget_settings(conn)
         if not b.get("chosen"):
@@ -80,7 +80,7 @@ def reserve(conn: sqlite3.Connection, purpose: str, model: str, est_input_tokens
             raise BudgetBlocked("background_disabled", "Paid background work is disabled; briefing generated without the model.")
         est = estimate_cost(model, est_input_tokens, max_output_tokens)
         if est is not None:
-            est += max_web_searches * WEB_SEARCH_PER_REQUEST
+            est = est * multiplier + max_web_searches * WEB_SEARCH_PER_REQUEST
         if est is None:
             if scheduled or b.get("daily_limit_usd") is not None or b.get("monthly_limit_usd") is not None:
                 raise BudgetBlocked("pricing_unknown", f"No pricing configured for model '{model}'; paid call refused.")
@@ -101,9 +101,14 @@ def reserve(conn: sqlite3.Connection, purpose: str, model: str, est_input_tokens
         return rid
 
 
+FAST_MODE_MULT = 2.0    # fast mode (Opus 5.5) is billed at 2x standard token prices
+
+
 def reconcile(conn, reservation_id: str, model: str, usage: dict, request_id: str | None) -> float:
     cost = estimate_cost(model, usage.get("input_tokens", 0), usage.get("output_tokens", 0),
                          usage.get("cache_read_input_tokens", 0) or 0, usage.get("cache_creation_input_tokens", 0) or 0) or 0.0
+    if usage.get("speed") == "fast":
+        cost *= FAST_MODE_MULT
     stu = usage.get("server_tool_use") or {}
     cost += (stu.get("web_search_requests") or 0) * WEB_SEARCH_PER_REQUEST
     with tx(conn):

@@ -187,6 +187,8 @@ interface ConversationCtx {
   sending: boolean;
   /** Live activity lines for the command in flight (tool use, web searches…). */
   liveEvents: string[];
+  /** Latest sandbox screenshot captured during the command in flight (shown live in the feed). */
+  liveShot: string | null;
   send: (req: Omit<CommandRequest, 'conversation_id' | 'tz'> & { tz?: string }) => Promise<CommandResponse | null>;
   pushEntry: (e: ThreadEntry) => void;
   updateResponse: (runId: string, fn: (r: CommandResponse) => CommandResponse) => void;
@@ -210,6 +212,7 @@ function useConversationState(speak: (t: string | null | undefined) => void): Co
   const [thread, setThread] = useState<ThreadEntry[]>([]);
   const [sending, setSending] = useState(false);
   const [liveEvents, setLiveEvents] = useState<string[]>([]);
+  const [liveShot, setLiveShot] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const pending = useRef<Promise<string> | null>(null);
 
@@ -248,6 +251,7 @@ function useConversationState(speak: (t: string | null | undefined) => void): Co
     async (req) => {
       setSending(true);
       setLiveEvents([]);
+      setLiveShot(null);
       pushEntry({ kind: 'user', id: localId('u'), text: req.text, channel: req.channel, at: req.captured_at });
       const hex = Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => b.toString(16).padStart(2, '0')).join('');
       const client_run_id = `run_${hex}`;
@@ -258,8 +262,10 @@ function useConversationState(speak: (t: string | null | undefined) => void): Co
       try {
         es = new EventSource(`/api/runs/${encodeURIComponent(client_run_id)}/stream`);
         es.addEventListener('run_event', (m) => {
-          live.push((JSON.parse((m as MessageEvent).data) as { message: string }).message);
+          const ev = JSON.parse((m as MessageEvent).data) as { message: string; data?: { shot_id?: string } };
+          live.push(ev.message);
           setLiveEvents([...live]);
+          if (ev.data?.shot_id) setLiveShot(ev.data.shot_id);
         });
         es.addEventListener('done', () => es?.close());
         es.onerror = () => {
@@ -277,6 +283,8 @@ function useConversationState(speak: (t: string | null | undefined) => void): Co
           try {
             const evs = await api.runEvents(client_run_id);
             setLiveEvents(evs.map((e) => e.message));
+            const shot = [...evs].reverse().find((e) => (e.data as { shot_id?: string } | undefined)?.shot_id);
+            if (shot) setLiveShot((shot.data as { shot_id: string }).shot_id);
           } catch {
             /* run not created yet */
           }
@@ -317,7 +325,7 @@ function useConversationState(speak: (t: string | null | undefined) => void): Co
     setThread([]);
   }, []);
 
-  return { conversationId, ensureConversation, thread, sending, liveEvents, send, pushEntry, updateResponse, newConversation, loadError };
+  return { conversationId, ensureConversation, thread, sending, liveEvents, liveShot, send, pushEntry, updateResponse, newConversation, loadError };
 }
 
 // ---------------- Provider ----------------

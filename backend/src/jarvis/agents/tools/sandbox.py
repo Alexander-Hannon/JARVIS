@@ -74,6 +74,7 @@ def browser_open(run, url: str):
     except S.SandboxError as e:
         return _err(e)
     if r.get("screenshot_id"):
+        run_event(run.conn, run.run_id, "tool", f"Opened {r.get('title') or url}", {"shot_id": r["screenshot_id"]})
         run.visuals["sandbox_shot"] = {"type": "screenshot", "shot_id": r["screenshot_id"], "title": r.get("title"),
                                        "url": r.get("url")}
     return {k: r[k] for k in ("title", "url", "text", "note")}

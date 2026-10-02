@@ -130,11 +130,32 @@ function ResponseView({ resp }: { resp: CommandResponse }) {
         )}
       </div>
       {resp.proposal && (
-        <ProposalCard proposal={resp.proposal} onCorrection={correction} onChanged={(np) => conv.updateResponse(resp.run_id, (r) => ({ ...r, proposal: np }))} />
+        <ProposalCard
+          proposal={resp.proposal}
+          onCorrection={correction}
+          onChanged={(np) => {
+            conv.updateResponse(resp.run_id, (r) => ({ ...r, proposal: np }));
+            // An approved internet window for the sandbox unblocks the task JARVIS was doing: resume it right here.
+            const net = np.items.find((i) => i.action_type === 'sandbox.network' && i.state === 'verified');
+            if (net && !resumed.has(np.id)) {
+              resumed.add(np.id);
+              const sites = ((net.args.domains as string[] | undefined) ?? []).join(', ');
+              void conv.send({
+                text: `Sandbox internet access to ${sites} is approved and open. Continue the task you were doing.`,
+                channel: 'typed',
+                captured_at: new Date().toISOString(),
+                speech_playing: false,
+              });
+            }
+          }}
+        />
       )}
     </div>
   );
 }
+
+// Proposals whose approval already triggered an automatic continue (one resume per approval).
+const resumed = new Set<string>();
 
 interface Attachment {
   key: string;
@@ -257,6 +278,9 @@ export function ConsolePage() {
                   › {e}
                 </div>
               ))}
+              {conv.liveShot && (
+                <img className="live-shot" src={`/api/sandbox/shots/${conv.liveShot}`} alt="What JARVIS sees in the sandbox right now" />
+              )}
             </div>
           </div>
         )}

@@ -80,12 +80,41 @@ def offered(conn) -> list[Tool]:
     return [t for t in load_all().values() if t.available is None or t.available(conn)] + dynamic(conn)
 
 
+def _connected_checks(conn) -> dict[str, bool]:
+    """Which integration families are live right now. Their tools load up front (no tool-search round trip, ~5 s each);
+    only unconnected apps, MCP servers and skills stay behind tool search."""
+    from jarvis.integrations import accounts as A
+    out = {"email": bool(A.connected_mailboxes(conn))}
+    for fam, provider in (("notes", "notion"), ("messaging", "slack"), ("life", "spotify"), ("home", "homeassistant"),
+                          ("travel", "routing"), ("finance", "simplefin"), ("canvas", "canvas")):
+        out[fam] = A.app_connected(conn, provider)
+    try:
+        from jarvis.agents.tools.sandbox import sandbox_available
+        out["sandbox"] = sandbox_available(conn)
+    except Exception:  # noqa: BLE001
+        out["sandbox"] = False
+    return out
+
+
+def _defer(t: Tool, live: dict[str, bool]) -> bool:
+    if not t.deferred or t.name.startswith(("mcp__", "skill__")) or t.family == "skills":
+        return t.deferred
+    key = "canvas" if t.name.startswith("canvas") else t.family
+    return not live.get(key, False)
+
+
 def schemas(conn, allow: Callable[[Tool], bool] | None = None) -> list[dict]:
     """Client tool definitions for one request. Deferred tools are only reachable through tool search, which keeps the
     prompt small (and cacheable) as integrations and MCP servers add dozens of tools."""
     tools = [t for t in offered(conn) if allow is None or allow(t)]
-    out = [t.schema() for t in tools]
-    if any(t.deferred for t in tools):
+    live = _connected_checks(conn)
+    out, any_deferred = [], False
+    for t in tools:
+        d = _defer(t, live)
+        any_deferred |= d
+        sch = {"name": t.name, "description": t.description, "input_schema": t.input_schema}
+        out.append(sch | ({"defer_loading": True} if d else {}))
+    if any_deferred:
         out.insert(0, dict(TOOL_SEARCH))
     return out
 

@@ -574,6 +574,20 @@ def sandbox_history(limit: int = 100, conn=Depends(db)):
     return SB.history(conn, limit)
 
 
+@router.get("/sandbox/live.png")
+def sandbox_live():
+    """A fresh capture of the sandbox desktop (not stored). 204 when the sandbox isn't running."""
+    from jarvis.sandbox.runtime import SandboxUnavailable, get_runtime
+    rt = get_runtime()
+    if not rt.status().get("running"):
+        return Response(status_code=204)
+    try:
+        png = rt.screenshot()
+    except SandboxUnavailable:
+        return Response(status_code=204)
+    return Response(png, media_type="image/png")
+
+
 @router.get("/sandbox/shots/{shot_id}")
 def sandbox_shot(shot_id: str):
     from fastapi.responses import FileResponse

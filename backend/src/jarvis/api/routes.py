@@ -1140,6 +1140,8 @@ def brain(conn=Depends(db)):
     return {"mode": "v2_agent" if ok else "offline", "reason": None if ok else why,
             "web_research": data.get("research", {}).get("web_enabled", True),
             "max_searches": agent.search_limit(conn),
+            "fast_mode": bool(data.get("research", {}).get("fast_mode")),
+            "effort": data.get("research", {}).get("effort", "auto"),
             "model": (data.get("models") or {}).get("agent") or get_settings().model_default,
             "tools": [t.name for t in tools.offered(conn)],
             "assistant_name": agent.assistant_name(conn),

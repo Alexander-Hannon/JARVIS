@@ -35,7 +35,14 @@ function richApi(): MockApi {
     .on('GET', '/api/localops/roots', j([{ id: 'r1', path: '/home/aj/jarvis-workspace', label: 'Workspace', writable: false }]))
     .on('GET', '/api/backups', j([{ id: 'bk1', path: '/data/backups/bk1.tar', sha256: 'deadbeef', bytes: 204800, schema_version: 3, created_at: now }]))
     .on('GET', '/api/doctor', j({ checks: [{ name: 'database', status: 'ok', detail: 'schema v3', remedy: null }, { name: 'stt', status: 'warn', detail: 'model not warmed', remedy: 'Settings → Voice → Warm up' }] }))
-    .on('GET', '/api/headsup', j({ cards: [{ kind: 'approvals', tone: 'attention', title: '1 waiting for your approval', detail: 'Add task', link: '/actions' }, { kind: 'leave_by', tone: 'attention', title: 'Leave by 4:02 PM for Advisor meeting', detail: 'About 20 min', link: '/' }] }))
+    .on('GET', '/api/headsup', j({ cards: [
+      { kind: 'conflict', tone: 'warn', title: 'Calendar conflict', detail: '', items: [{ title: 'RUMBLE overlaps MKT MEETING' }], link: '/' },
+      { kind: 'deadlines', tone: 'info', title: '16 deadlines this week', detail: '5 due tomorrow, 12 more later', link: '/missions',
+        items: [{ title: 'Pricing Decision Brief', meta: 'MKT 601', when: 'tomorrow' },
+                { title: 'Ch 10 Video Assignment: The Art Direction Playbook for Brands (Stussy Case Study)', meta: 'MKT 601', when: 'tomorrow' },
+                { title: 'Ch 10 Student Edition Company Case', meta: 'MKT 601', when: 'tomorrow' },
+                { title: 'Assignment 4', meta: 'MSC 550', when: 'Sun' }] },
+      { kind: 'leave_by', tone: 'attention', title: 'Leave by 4:02 PM for Advisor meeting', detail: 'About 20 min', link: '/' }] }))
     .on('GET', '/api/report/weekly', j({ commands: 12, actions_done: 5, auto_approved: 2, mission_runs: 9, spend_usd: 0.84, minutes_saved_estimate: 49, estimate_basis: 'x' }))
     .on('GET', '/api/missions', j({ missions: [{ id: 'm1', name: 'Inbox watch', goal: 'Check my inbox for anything from my advisor.', schedule: { kind: 'interval', minutes: 120 }, tz: 'America/Chicago', families: ['email'], allow_proposals: false, output: 'quiet', max_cost_usd: 0.25, monthly_cost_usd: 5, month_spend: 0.4, quiet_start: '22:00', quiet_end: '07:00', enabled: true, next_run_at: new Date(Date.now() + 3600e3).toISOString(), last_run_at: now, last_status: 'done', last_summary: 'Dr. Lee wants grades by Friday.', runs: [{ id: 'r1', run_id: 'x', started_at: now, finished_at: now, status: 'done', summary: 'Dr. Lee wants grades by Friday.', cost_usd: 0.03, proposal_id: null }] }], templates: [{ key: 'inbox_watch', name: 'Inbox watch', goal: 'x', schedule: { kind: 'interval', minutes: 120 }, families: ['email'], output: 'quiet' }], families: ['chief', 'email', 'calendar'], read_only_families: ['chief'] }))
     .on('GET', '/api/briefings', j([{ id: 'b1', kind: 'daily_command', for_date: '2026-10-01', content: { headline: 'Grading day with a GTA shift at six', mission: 'Finish IS 640 grading', first_action: 'Open the rubric' }, spoken_summary: 'Grading day.', sources: null, generated_by: 'deterministic', catch_up: false, created_at: now }]))
