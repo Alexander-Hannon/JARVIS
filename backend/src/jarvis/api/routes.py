@@ -888,11 +888,11 @@ class PurposeIn(BaseModel):
 
 
 @router.post("/integrations/google/start")
-def google_start(body: PurposeIn, response: Response, conn=Depends(db)):
+def google_start(body: PurposeIn, request: Request, response: Response, conn=Depends(db)):
     from jarvis.integrations.service import SetupError
     from jarvis.integrations.service import google_start as gs
     try:
-        url, binding = gs(conn, body.purpose)
+        url, binding = gs(conn, body.purpose, request.headers.get("origin"))
     except SetupError as e:
         _serr(e)
     # Lax (not Strict) so the browser sends it on the redirect back from Google; scoped to the callback path only.
@@ -1037,7 +1037,7 @@ def disconnect(account_id: str, conn=Depends(db)):
     a = A.get_account_by_id(conn, account_id)
     if not a:
         raise HTTPException(404)
-    if a["provider"] == "google" and a["secret_ciphertext"]:
+    if a["provider"] in ("google", "gmail") and a["secret_ciphertext"]:
         import json
 
         from jarvis.integrations.google_oauth import revoke

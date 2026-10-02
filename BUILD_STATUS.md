@@ -1,5 +1,24 @@
 # BUILD_STATUS
 
+## Session 9 update (2026-10-01): V4.2 — voice-first Command, plain-language sandbox, Gmail fix, live plan
+- **Gmail "redirect_uri_mismatch":** cause: with `JARVIS_PUBLIC_ORIGIN` set to the Tailscale address, every OAuth start
+  sent the `https://…ts.net/…/callback` redirect, which isn't registered in the Google OAuth client (only localhost is).
+  Fix: the callback follows the address AJ is browsing from (allowed origins only), and Google setup lists every
+  redirect URI to register. AJ still needs to add the ts.net URI in Google Cloud to connect while on Tailscale.
+- **Gmail on a different Google account:** connecting a personal Gmail would have replaced the school Google account
+  (dropping Calendar grants). Gmail is now its own account slot (`provider='gmail'`); regression test proves Calendar
+  and its grants survive.
+- **Sandbox in the feed reads like a person:** steps are plain sentences ("Opened flyfrontier.com/where-we-fly",
+  "Wrote a script", "Ran a Python script (failed)"); commands and output are folded under "Technical details". Live
+  progress lines use the same labels.
+- **Voice first:** the typing box is hidden by default; a "Type instead" toggle at the bottom opens it (remembered per
+  device), and it opens on its own if the mic is unavailable.
+- **Plan stays current:** Today's priorities are checked off as matching tasks are completed today (JARVIS completions
+  immediately, direct Todoist completions via its completed-tasks API; never assumed). "Next:" advances, and an
+  all-done state appears. The accepted plan itself isn't rewritten.
+- **Tests:** backend 340 passed (+3: Gmail separate account, origin-following redirects, plan progress); UI (mocked)
+  19 passed (+2: voice-first toggle, plain-language sandbox steps).
+
 ## Session 8 update (2026-10-01): V4.1 — feed-native sandbox, speed, Today polish
 From AJ's first real use of V4:
 - **Sandbox task never finished:** JARVIS asked to open espn.com/rolltide.com, AJ approved, the window opened — and

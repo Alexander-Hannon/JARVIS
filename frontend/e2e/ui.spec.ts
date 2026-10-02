@@ -6,6 +6,7 @@ import { capture, commandResponse, CSRF, MockApi, proposal, setupApp, verified }
 const SHOTS = 'e2e/screenshots';
 
 async function sendTyped(page: Page, text: string) {
+  if (!(await page.getByTestId('cmd-input').isVisible())) await page.getByTestId('type-toggle').click(); // voice-first default
   await page.getByTestId('cmd-input').fill(text);
   await page.getByTestId('send-btn').click();
 }
@@ -228,7 +229,7 @@ test.describe('UI (mocked API)', () => {
     await expect(page.getByTestId('send-transcript')).toHaveCount(0);
   });
 
-  test('server audio errors (422 no_speech) are shown as voice errors, typed input stays usable', async ({ page }) => {
+  test('server audio errors (422 no_speech) are shown as voice errors, typed input stays one tap away', async ({ page }) => {
     const api = await setupApp(page);
     api.on('POST', '/api/captures/audio', () => ({ status: 422, json: { detail: { code: 'no_speech', message: 'No speech detected' } } }));
     await page.goto('/console');
@@ -237,6 +238,9 @@ test.describe('UI (mocked API)', () => {
     await page.waitForTimeout(600);
     await page.getByTestId('record-btn').click();
     await expect(page.getByTestId('voice-error')).toContainText('Voice error (no_speech)');
+    // voice first: "didn't catch that" keeps you in voice mode; typing is one tap away
+    await expect(page.getByTestId('cmd-input')).toHaveCount(0);
+    await page.getByTestId('type-toggle').click();
     await expect(page.getByTestId('cmd-input')).toBeEditable();
     expect(api.callsTo('POST', '/api/commands')).toHaveLength(0);
   });

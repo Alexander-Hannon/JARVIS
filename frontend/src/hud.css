@@ -809,3 +809,12 @@ fieldset.chips label.chip { cursor: pointer; }
 .viz-sandbox .sbx-inline-shot { display: block; width: min(100%, 480px); aspect-ratio: 16 / 10; object-fit: contain; background: #000;
   border: 1px solid rgba(0, 216, 255, 0.25); margin-bottom: 8px; cursor: zoom-in; }
 .viz-sandbox .sbx-log { max-height: 16rem; }
+.sbx-steps { margin: 0 0 6px; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 2px; font-size: 0.92rem; }
+.sbx-steps li.failed { color: #ff8a65; }
+.sbx-tech summary { color: var(--muted); font-size: 0.82rem; cursor: pointer; }
+.input-mode { display: flex; justify-content: center; margin: 4px 0; }
+.type-toggle { color: var(--muted); }
+.type-toggle[aria-pressed='true'] { color: var(--accent); }
+.priorities li.done { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(0, 216, 255, 0.5); }
+.done-mark { color: var(--accent); text-decoration: none; display: inline-block; }
+.plan-done { color: var(--accent); }

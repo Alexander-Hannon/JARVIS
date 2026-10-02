@@ -330,7 +330,16 @@ function GoogleSection({ integrations }: { integrations: Integration[] }) {
             )}
             <KV
               items={[
-                ['Redirect URI', <code key="r">{s.redirect_uri}</code>],
+                [
+                  'Redirect URIs to register',
+                  <span key="r">
+                    {(s.redirect_uris ?? [s.redirect_uri]).map((u) => (
+                      <code key={u} style={{ display: 'block' }}>
+                        {u}
+                      </code>
+                    ))}
+                  </span>,
+                ],
                 ['Calendar scopes', s.scopes.calendar.join(', ') || '—'],
                 ['Drive scopes', s.scopes.drive.join(', ') || '—'],
               ]}
@@ -432,7 +441,7 @@ function EmailSection({ integrations, onChanged }: { integrations: Integration[]
         <MailboxRow
           label="Gmail"
           mailbox="gmail"
-          integration={integrations.find((i) => i.provider === 'google')}
+          integration={integrations.find((i) => i.provider === 'gmail')}
           connected={boxes?.gmail?.status === 'connected'}
           address={boxes?.gmail?.address ?? null}
           onChanged={() => {

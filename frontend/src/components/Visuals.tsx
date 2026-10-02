@@ -71,7 +71,7 @@ export interface SandboxVisual {
   type: 'sandbox';
   shot_id: string | null;
   network: { active: boolean; domains: string[]; until: string | null };
-  steps: { kind: string; detail: string; exit_code: number | null; output: string; ms: number | null }[];
+  steps: { kind: string; summary?: string; detail: string; exit_code: number | null; output: string; ms: number | null }[];
   desktop_actions: number;
 }
 export type Visual = CalendarVisual | WeatherVisual | TasksVisual | SlotsVisual | InboxVisual | ScreenshotVisual | SandboxVisual;
@@ -92,15 +92,26 @@ export function SandboxCard({ v }: { v: SandboxVisual }) {
         </a>
       )}
       {v.steps.length > 0 && (
-        <ol className="plain sbx-log">
-          {v.steps.map((st, i) => (
-            <li key={i}>
-              <code>{st.kind === 'exec' ? `$ ${st.detail}` : `${st.kind}: ${st.detail}`}</code>
-              {st.exit_code !== null && st.exit_code !== 0 && <span className="bad-text small"> exit {st.exit_code}</span>}
-              {st.output && st.kind === 'exec' && <pre className="sbx-out">{st.output}</pre>}
-            </li>
-          ))}
-        </ol>
+        <>
+          <ol className="sbx-steps">
+            {v.steps.map((st, i) => (
+              <li key={i} className={st.exit_code !== null && st.exit_code !== 0 ? 'failed' : ''}>
+                {st.summary ?? st.kind}
+              </li>
+            ))}
+          </ol>
+          <details className="sbx-tech">
+            <summary>Technical details</summary>
+            <ol className="plain sbx-log">
+              {v.steps.map((st, i) => (
+                <li key={i}>
+                  <code>{st.kind === 'exec' ? `$ ${st.detail}` : `${st.kind}: ${st.detail}`}</code>
+                  {st.output && st.kind === 'exec' && <pre className="sbx-out">{st.output}</pre>}
+                </li>
+              ))}
+            </ol>
+          </details>
+        </>
       )}
     </div>
   );

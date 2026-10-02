@@ -154,6 +154,8 @@ function ResponseView({ resp }: { resp: CommandResponse }) {
   );
 }
 
+const TYPING_KEY = 'jarvis.typing';
+
 // Proposals whose approval already triggered an automatic continue (one resume per approval).
 const resumed = new Set<string>();
 
@@ -182,9 +184,26 @@ export function ConsolePage() {
     endRef.current?.scrollIntoView?.({ block: 'end', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
   }, [conv.thread.length]);
 
-  const focusTyped = useCallback(() => {
-    window.setTimeout(() => inputRef.current?.focus(), 0);
+  // Voice first: the keyboard is a toggle (remembered per device). It opens on its own when the mic is unavailable.
+  const [typing, setTypingState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(TYPING_KEY) === 'on';
+    } catch {
+      return false;
+    }
+  });
+  const setTyping = useCallback((on: boolean) => {
+    setTypingState(on);
+    try {
+      localStorage.setItem(TYPING_KEY, on ? 'on' : 'off');
+    } catch {
+      /* private mode: in-memory only */
+    }
   }, []);
+  const focusTyped = useCallback(() => {
+    setTyping(true);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  }, [setTyping]);
 
   const addFiles = async (files: FileList | null) => {
     if (!files) return;
@@ -290,7 +309,19 @@ export function ConsolePage() {
       <div className="composer-wrap">
         <VoicePanel focusTyped={focusTyped} retainAudio={retainAudio} />
 
-        <form className="composer" onSubmit={submit}>
+        <div className="input-mode">
+          <button
+            type="button"
+            className="btn btn-small btn-ghost type-toggle"
+            aria-pressed={typing}
+            data-testid="type-toggle"
+            onClick={() => (typing ? setTyping(false) : focusTyped())}
+          >
+            <span aria-hidden="true">⌨</span> {typing ? 'Hide keyboard' : 'Type instead'}
+          </button>
+        </div>
+
+        {(typing || attachments.length > 0 || text) && <form className="composer" onSubmit={submit}>
           {attachments.length > 0 && (
             <ul className="chips" aria-label="Attachments">
               {attachments.map((a) => (
@@ -349,7 +380,7 @@ export function ConsolePage() {
           </div>
           <ErrorBox error={previewErr} />
           {preview && <EvidencePreviewView preview={preview} />}
-        </form>
+        </form>}
       </div>
     </div>
   );

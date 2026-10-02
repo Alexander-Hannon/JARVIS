@@ -35,7 +35,8 @@ def _err(e: S.SandboxError) -> dict:
       manual="Runs code in an isolated sandbox container. It can't see your files or accounts; internet only for "
              "domains you approve.", example="Analyze this CSV and chart spending by month.")
 def sandbox_run(run, command: str, timeout_s: int = 120):
-    run_event(run.conn, run.run_id, "tool", f"Sandbox: {command[:80]}")
+    from jarvis.agents.agent import describe_step
+    run_event(run.conn, run.run_id, "tool", f"Sandbox: {describe_step('exec', command, None).lower()}")
     try:
         return S.run(run.conn, run.run_id, command, timeout_s)
     except S.SandboxError as e:

@@ -16,6 +16,7 @@ test('multi-request typed command renders sections (real backend, real weather)'
   }
   await expect(page.getByRole('complementary', { name: 'Primary' })).toBeVisible();
   await page.goto('/console');
+  if (!(await page.getByTestId('cmd-input').isVisible())) await page.getByTestId('type-toggle').click();
   await page.getByTestId('cmd-input').fill(AJ);
   await page.getByRole('button', { name: 'Send', exact: true }).click();
   await expect(page.locator('.msg-section', { hasText: 'Weather' })).toBeVisible({ timeout: 30000 });

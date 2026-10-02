@@ -366,6 +366,33 @@ def computer_result(conn, run_id: str, b: Any, failed_before: bool, over_limit: 
     return res | {"content": out.get("text") or "OK"}, False
 
 
+def describe_step(kind: str, detail: str, exit_code: int | None) -> str:
+    """Plain-language label for a sandbox step (the raw command stays in the collapsed technical details)."""
+    from urllib.parse import urlsplit
+    d = detail.strip()
+    if kind == "browse":
+        u = urlsplit(d)
+        label = f"Opened {(u.hostname or d).removeprefix('www.')}{u.path.rstrip('/') if u.path not in ('', '/') else ''}"
+    elif kind == "write":
+        label = f"Saved {d.rsplit('/', 1)[-1]}"
+    elif kind == "read":
+        label = f"Read {d.rsplit('/', 1)[-1]}"
+    elif kind == "network":
+        label = d
+    elif kind == "exec":
+        low = d.lower()
+        label = ("Installed packages" if re.search(r"\bpip3? install|apt(-get)? install|npm i(nstall)?\b", low) else
+                 "Downloaded data" if re.match(r"(curl|wget)\b", low) else
+                 "Wrote a script" if re.search(r"cat\s*>\s*\S+\.(py|sh|js)", low) else
+                 "Used the browser" if "playwright" in low or "chromium" in low else
+                 "Ran a Python script" if low.startswith(("python", "python3")) else
+                 "Looked through files" if re.match(r"(ls|find|cat|head|tail|grep|jq)\b", low) else
+                 "Ran a command")
+    else:
+        label = kind.capitalize()
+    return label + (" (failed)" if exit_code not in (None, 0) else "")
+
+
 def sandbox_visual(conn, run_id: str) -> dict | None:
     """What the sandbox did during this run, shown inline in the feed (no need to open the Workbench)."""
     steps = rows(conn, "SELECT kind, detail, exit_code, output, duration_ms FROM sandbox_runs WHERE run_id=? "
@@ -377,8 +404,9 @@ def sandbox_visual(conn, run_id: str) -> dict | None:
         return None
     from jarvis.sandbox import service as SB
     return {"type": "sandbox", "shot_id": shots[-1] if shots else None, "network": SB.network(conn),
-            "steps": [{"kind": s["kind"], "detail": s["detail"][:300], "exit_code": s["exit_code"],
-                       "output": (s["output"] or "")[:600], "ms": s["duration_ms"]}
+            "steps": [{"kind": s["kind"], "summary": describe_step(s["kind"], s["detail"], s["exit_code"]),
+                       "detail": s["detail"][:300], "exit_code": s["exit_code"], "output": (s["output"] or "")[:600],
+                       "ms": s["duration_ms"]}
                       for s in steps if s["kind"] != "computer"][-8:],
             "desktop_actions": sum(1 for s in steps if s["kind"] == "computer")}
 

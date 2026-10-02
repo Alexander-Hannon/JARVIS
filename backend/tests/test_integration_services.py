@@ -221,3 +221,57 @@ def test_gzip_feed_and_url_never_logged(client, conn, caplog):
     rec = logging.LogRecord("x", logging.INFO, __file__, 1, "fetched %s", (url,), None)
     RedactURLs().filter(rec)
     assert "SECRETTOKEN123" not in rec.getMessage() and "[redacted]" in rec.getMessage()
+
+
+def _google_flow(client, monkeypatch, purpose, email, origin=None):
+    from urllib.parse import parse_qs, urlsplit
+
+    from fastapi.testclient import TestClient
+
+    from jarvis.integrations import google_oauth
+    monkeypatch.setattr(google_oauth, "exchange_code", lambda *a, **k: {"access_token": "at", "refresh_token": "rt",
+                                                                        "expires_at": 9e9, "scope": "openid email"})
+    monkeypatch.setattr(google_oauth, "fetch_userinfo", lambda *a, **k: {"email": email})
+    headers = {"Origin": origin} if origin else {}
+    start = client.post("/api/integrations/google/start", {"purpose": purpose}, headers=headers)
+    q = parse_qs(urlsplit(start.json()["auth_url"]).query)
+    same = TestClient(client.c.app, cookies={"jarvis_oauth_binding": start.cookies.get("jarvis_oauth_binding")})
+    r = same.get(f"/api/integrations/google/callback?state={q['state'][0]}&code=abc", follow_redirects=False)
+    return q["redirect_uri"][0], r
+
+
+def test_gmail_on_a_different_google_account_never_touches_calendar(client, conn, monkeypatch):
+    """Regression (AJ, 2026-10-01): connecting a personal Gmail must not replace the school Calendar account."""
+    monkeypatch.setenv("JARVIS_GOOGLE_CLIENT_ID", "cid.apps.googleusercontent.com")
+    monkeypatch.setenv("JARVIS_GOOGLE_CLIENT_SECRET", "test-secret")
+    from jarvis.config import reset_settings_cache
+    reset_settings_cache()
+    _google_flow(client, monkeypatch, "calendar", "aj@uah.example")
+    cal = conn.execute("SELECT id FROM integration_accounts WHERE provider='google'").fetchone()["id"]
+    conn.execute("INSERT INTO scope_grants (id, account_id, resource_type, resource_id, access, created_at) VALUES "
+                 "('g1', ?, 'calendar', 'primary', 'write', 'now')", (cal,))
+    _, r = _google_flow(client, monkeypatch, "gmail", "aj.personal@gmail.example")
+    assert r.headers["location"] == "/connections?connected=google"
+    rows = {x["provider"]: x for x in conn.execute("SELECT provider, label, status, id FROM integration_accounts")}
+    assert rows["google"]["label"] == "aj@uah.example" and rows["google"]["status"] == "connected"
+    assert rows["gmail"]["label"] == "aj.personal@gmail.example"
+    assert conn.execute("SELECT COUNT(*) FROM scope_grants WHERE account_id=?", (cal,)).fetchone()[0] == 1
+    assert client.get("/api/inbox").json()["mailboxes"]["gmail"] == {"status": "connected", "address": "aj.personal@gmail.example"}
+
+
+def test_oauth_callback_follows_the_address_aj_is_using(client, monkeypatch):
+    """Regression (AJ, 2026-10-01): with a Tailscale public origin set, browsing on localhost must still call back to
+    localhost (and vice versa); unknown origins fall back to the default."""
+    monkeypatch.setenv("JARVIS_GOOGLE_CLIENT_ID", "cid.apps.googleusercontent.com")
+    monkeypatch.setenv("JARVIS_GOOGLE_CLIENT_SECRET", "test-secret")
+    monkeypatch.setenv("JARVIS_PUBLIC_ORIGIN", "https://thedevice.example.ts.net")
+    from jarvis.config import get_settings, reset_settings_cache
+    reset_settings_cache()
+    port = get_settings().port
+    ru, _ = _google_flow(client, monkeypatch, "gmail", "x@gmail.example", origin=f"http://localhost:{port}")
+    assert ru == f"http://localhost:{port}/api/integrations/google/callback"
+    ru, _ = _google_flow(client, monkeypatch, "gmail", "x@gmail.example", origin="https://thedevice.example.ts.net")
+    assert ru == "https://thedevice.example.ts.net/api/integrations/google/callback"
+    info = client.get("/api/integrations/google/setup").json()
+    assert set(info["redirect_uris"]) == {f"http://localhost:{port}/api/integrations/google/callback",
+                                          "https://thedevice.example.ts.net/api/integrations/google/callback"}

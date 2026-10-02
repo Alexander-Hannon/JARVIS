@@ -142,11 +142,11 @@ class MsStartIn(BaseModel):
 
 
 @router.post("/integrations/microsoft/start")
-def microsoft_start(body: MsStartIn, response: Response, conn=Depends(db)):
+def microsoft_start(body: MsStartIn, request: Request, response: Response, conn=Depends(db)):
     from jarvis.integrations.service import SetupError
     from jarvis.integrations.service import microsoft_start as ms
     try:
-        url, binding = ms(conn, "mail", body.with_send)
+        url, binding = ms(conn, "mail", body.with_send, request.headers.get("origin"))
     except SetupError as e:
         _serr(e)
     response.set_cookie(MS_BINDING_COOKIE, binding, httponly=True, samesite="lax", secure=get_settings().remote_mode,

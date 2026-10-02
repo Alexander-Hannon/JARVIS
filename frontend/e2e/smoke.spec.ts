@@ -77,6 +77,8 @@ test('smoke: every route and settings section renders (mocked API)', async ({ pa
   await expect(page.getByText('No rules yet')).toBeVisible();
   await page.goto('/');
   await expect(page.getByText('Leave by 4:02 PM for Advisor meeting')).toBeVisible();
+  await expect(page.getByTestId('priority-0')).toHaveClass(/done/);
+  await expect(page.getByText('Next:')).toBeVisible();
   await page.goto('/missions');
   await expect(page.getByText('Dr. Lee wants grades by Friday.').first()).toBeVisible();
   await page.goto('/inbox');
