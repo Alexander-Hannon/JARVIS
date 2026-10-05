@@ -126,7 +126,7 @@ def upsert_deadlines(conn: sqlite3.Connection, account_id: str, items: list[dict
     the row's local_date is inside [window_start, window_end). A stale item (lower SEQUENCE than
     stored) does not overwrite newer data.
     """
-    mappings = rows(conn, "SELECT pattern, course, role FROM course_mappings" +
+    mappings = rows(conn, "SELECT pattern, course, role FROM course_mappings" +  # nosec B608 fixed clause
                     (" WHERE confirmed = 1" if confirmed_mappings_only else ""))
     counts = {"added": 0, "updated": 0, "cancelled": 0, "unchanged": 0}
     now = now_iso()
@@ -151,7 +151,7 @@ def upsert_deadlines(conn: sqlite3.Connection, account_id: str, items: list[dict
                      (account_id, key[0], key[1]))
             if ex is None:
                 cols = ["id", "account_id", "uid", "recurrence_id", *vals, "first_seen_at", "last_seen_at"]
-                conn.execute(f"INSERT INTO deadline_items ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                conn.execute(f"INSERT INTO deadline_items ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",  # nosec B608 columns from code; values bound
                              [new_id("dl"), account_id, key[0], key[1], *vals.values(), now, now])
                 counts["cancelled" if vals["status"] == "cancelled" else "added"] += 1
                 continue
@@ -162,7 +162,7 @@ def upsert_deadlines(conn: sqlite3.Connection, account_id: str, items: list[dict
             changed = any(ex[k] != v for k, v in vals.items())
             if changed:
                 sets = ", ".join(f"{k}=?" for k in vals)
-                conn.execute(f"UPDATE deadline_items SET {sets}, last_seen_at=? WHERE id=?",
+                conn.execute(f"UPDATE deadline_items SET {sets}, last_seen_at=? WHERE id=?",  # nosec B608 columns from code; values bound
                              [*vals.values(), now, ex["id"]])
                 if vals["status"] == "cancelled" and ex["status"] != "cancelled":
                     counts["cancelled"] += 1

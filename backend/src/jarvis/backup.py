@@ -88,7 +88,7 @@ def restore_preview(bid: str) -> dict:
         with tarfile.open(p) as tar:
             tar.extract("jarvis.db", td, filter="data")
         c = sqlite3.connect(str(Path(td) / "jarvis.db"))
-        counts = {t: c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+        counts = {t: c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]  # nosec B608 table names from a literal tuple
                   for t in ("memories", "source_documents", "proposals", "briefings", "task_links", "calendar_links")}
         pending = {
             "queued_jobs_to_cancel": c.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','leased','paused')").fetchone()[0],

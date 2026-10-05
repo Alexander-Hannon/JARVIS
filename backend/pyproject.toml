@@ -46,7 +46,8 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["slow: uses the real local STT model", "live: requires real provider credentials (never run by default)"]
+markers = ["slow: uses the real local STT model", "live: requires real provider credentials (never run by default)",
+           "injection: prompt-injection / untrusted-content regression suite (run on its own in CI)"]
 addopts = "-m 'not live'"
 
 [tool.ruff]

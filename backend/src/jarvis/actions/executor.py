@@ -87,7 +87,7 @@ def _guard(conn, a: dict, pv: dict, p: dict, approval_id: str) -> None:
 
 def _set_state(conn, a_id: str, state: str, **fields) -> None:
     sets = ", ".join(f"{k}=?" for k in fields)
-    conn.execute(f"UPDATE proposed_actions SET state=?, updated_at=?{', ' + sets if sets else ''} WHERE id=?",
+    conn.execute(f"UPDATE proposed_actions SET state=?, updated_at=?{', ' + sets if sets else ''} WHERE id=?",  # nosec B608 column names are code-supplied kwargs; values bound
                  (state, now_iso(), *fields.values(), a_id))
 
 

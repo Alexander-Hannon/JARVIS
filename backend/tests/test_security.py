@@ -21,7 +21,7 @@ def test_setup_only_once_and_only_loopback(app):
     c = TestClient(app, client=("203.0.113.9", 5555))
     assert c.get("/api/auth/status").json()["setup_allowed"] is False
     assert c.post("/api/auth/setup", json={"password": "x" * 12}).status_code == 403
-    local = TestClient(app)
+    local = TestClient(app, client=("127.0.0.1", 5000))
     assert local.post("/api/auth/setup", json={"password": "short"}).status_code == 400
     assert local.post("/api/auth/setup", json={"password": "long enough pw"}).status_code == 200
     assert local.post("/api/auth/setup", json={"password": "another long pw"}).status_code in (403, 409)

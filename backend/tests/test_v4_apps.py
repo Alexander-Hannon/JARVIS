@@ -128,6 +128,7 @@ def test_notion_create_reconciles_and_refuses_duplicate_title(client, conn, apps
 
 
 # ------------------------------------------------------------------------------------------------ Slack
+@pytest.mark.injection
 def test_slack_defaults_to_self_dm_and_channels_need_naming_and_grant(client, conn, apps):
     freeze(CHICAGO_AFTERNOON)
     grant(conn, apps, "slack", "slack_self", "write", [("U_AJ", "Your own DM")])
@@ -152,6 +153,7 @@ def test_slack_defaults_to_self_dm_and_channels_need_naming_and_grant(client, co
 
 
 # ------------------------------------------------------------------------------------------------ Home Assistant
+@pytest.mark.injection
 def test_home_tier_comes_from_device_not_model(client, conn, apps):
     freeze(CHICAGO_AFTERNOON)
     devices = [("light.office", "Office light"), ("lock.front_door", "Front door")]

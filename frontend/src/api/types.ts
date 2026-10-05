@@ -11,9 +11,21 @@ export interface AuthStatus {
   csrf_token?: string | null;
   remote_mode: boolean;
   setup_allowed: boolean;
+  /** No owner yet and this browser isn't directly on the host: setup needs the console token. */
+  setup_token_required?: boolean;
 }
 export interface CsrfResponse {
   csrf_token: string;
+}
+export interface DeviceSession {
+  id: string;
+  label: string | null;
+  created_at: ISODate;
+  last_seen_at: ISODate | null;
+  expires_at: ISODate;
+  ip: string | null;
+  user_agent: string | null;
+  current: boolean;
 }
 export interface PairingCode {
   code: string;

@@ -83,6 +83,7 @@ def test_stale_button_after_revision_is_refused(client, conn, tg, fakes):
     assert "changed" in tg.answers[-1] and client.get(f"/api/proposals/{p['id']}").json()["approval"] is None
 
 
+@pytest.mark.injection
 def test_forwarded_text_is_saved_not_executed(client, conn, tg, fakes):
     freeze(CHICAGO_AFTERNOON)
     pair(client, conn, tg)

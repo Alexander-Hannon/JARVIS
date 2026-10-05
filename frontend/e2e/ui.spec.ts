@@ -71,6 +71,36 @@ test.describe('UI (mocked API)', () => {
     expect(api.callsTo('POST', '/api/control/pause')[0].headers['x-csrf-token']).toBe(CSRF);
   });
 
+  test('signed-in devices: list, sign out one, sign out all others', async ({ page }) => {
+    let devices = [
+      { id: 'ses_me', label: 'Browser', created_at: '2026-10-01T12:00:00Z', last_seen_at: '2026-10-05T12:00:00Z', expires_at: '2026-10-15T12:00:00Z', ip: '127.0.0.1', user_agent: 'Chrome', current: true },
+      { id: 'ses_phone', label: 'Phone', created_at: '2026-10-02T12:00:00Z', last_seen_at: '2026-10-04T12:00:00Z', expires_at: '2026-10-16T12:00:00Z', ip: '100.64.0.7', user_agent: 'Safari', current: false },
+      { id: 'ses_old', label: 'Old laptop', created_at: '2026-09-20T12:00:00Z', last_seen_at: '2026-09-25T12:00:00Z', expires_at: '2026-10-06T12:00:00Z', ip: '100.64.0.9', user_agent: 'Firefox', current: false },
+    ];
+    const api = new MockApi();
+    api.on('GET', '/api/auth/sessions', () => ({ json: devices }));
+    api.on('POST', '/api/auth/sessions/ses_phone/revoke', () => {
+      devices = devices.filter((d) => d.id !== 'ses_phone');
+      return { json: { ok: true, current: false } };
+    });
+    api.on('POST', '/api/auth/sessions/revoke-others', () => {
+      devices = devices.filter((d) => d.current);
+      return { json: { revoked: 1 } };
+    });
+    await setupApp(page, api);
+    await page.goto('/settings#security');
+    const list = page.getByTestId('device-list');
+    await expect(list.locator('li')).toHaveCount(3);
+    await expect(list.locator('li').first()).toContainText('this device');
+    await expect(list.locator('li').first().getByRole('button', { name: 'Sign out' })).toHaveCount(0);   // not your own session
+    await list.locator('li', { hasText: 'Phone' }).getByRole('button', { name: 'Sign out' }).click();
+    await expect(list.locator('li')).toHaveCount(2);
+    page.once('dialog', (d) => void d.accept());
+    await page.getByRole('button', { name: 'Sign out all other devices' }).click();
+    await expect(list.locator('li')).toHaveCount(1);
+    expect(api.callsTo('POST', '/api/auth/sessions/revoke-others')[0].headers['x-csrf-token']).toBe(CSRF);
+  });
+
   test('typed command → proposal card → select → approve → verified receipt', async ({ page }) => {
     const api = await setupApp(page);
     wireProposalFlow(api);

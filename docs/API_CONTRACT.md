@@ -10,12 +10,18 @@ must send header `X-CSRF-Token: <csrf_token>` (returned by setup/login/status). 
 ## Auth
 | Method | Path | Body → Response |
 |---|---|---|
-| GET | /api/auth/status | → `{owner_exists, authenticated, csrf_token?, remote_mode, setup_allowed}` |
-| POST | /api/auth/setup | `{password}` (loopback only, once) → `{csrf_token}` + cookie |
-| POST | /api/auth/login | `{password}` → `{csrf_token}` + cookie |
+| GET | /api/auth/status | → `{owner_exists, authenticated, csrf_token?, remote_mode, setup_allowed, setup_token_required}` |
+| POST | /api/auth/setup | `{password (12+), setup_token?}` → `{csrf_token}` + cookie. Once. Without a token only from a *direct* loopback client in the local profile; a proxied request or the remote profile needs the console token (`jarvis serve` prints it; `jarvis setup-token`). 403 without it. |
+| POST | /api/auth/login | `{password}` → `{csrf_token}` + cookie. Revokes the session the browser already carried. 429 when throttled (per IP: 10 failures / 15 min; after 30 failures across IPs, only IPs that signed in before in the last 30 days). |
 | POST | /api/auth/logout | → `{ok}` |
 | POST | /api/auth/pairing-code | → `{code, expires_at}` (authenticated; for pairing a phone) |
-| POST | /api/auth/pair | `{code, label}` → `{csrf_token}` + cookie |
+| POST | /api/auth/pair | `{code, label}` → `{csrf_token}` + cookie. 429 after 5 wrong codes per IP or 30 overall in 15 min. |
+| GET | /api/auth/sessions | → `[{id, label, created_at, last_seen_at, expires_at, ip, user_agent, current}]` (active devices) |
+| POST | /api/auth/sessions/{id}/revoke | → `{ok, current}`; 404 if not active |
+| POST | /api/auth/sessions/revoke-others | → `{revoked}` (keeps the calling session) |
+
+Sessions end after `JARVIS_SESSION_IDLE_HOURS` without use (default 168) or `JARVIS_SESSION_TTL_HOURS` (default 336),
+whichever comes first. Every response carries a strict `Content-Security-Policy`; HTTPS responses add HSTS.
 
 ## Conversation, voice, commands
 | Method | Path | Body → Response |

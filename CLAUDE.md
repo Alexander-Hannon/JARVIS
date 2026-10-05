@@ -1,6 +1,8 @@
 # CLAUDE.md — JARVIS conventions and runtime safety boundaries
 
 Source spec: `JARVIS_BUILD_SPEC.md` (authoritative). Progress: `BUILD_STATUS.md`. HTTP contract: `docs/API_CONTRACT.md`.
+V5 ("Overseer", commercial, CUI-capable): `docs/V5_ROADMAP.md`. Security program: `docs/security/` (threat model,
+NIST 800-171 mapping — update it when a control changes), `SECURITY.md`. CI: `.github/workflows/ci.yml`.
 
 ## Layout
 - `backend/` — Python 3.12, uv. `src/jarvis/`: `api/` (FastAPI routes + security middleware; V4 routes in `v4.py`),
@@ -48,6 +50,13 @@ V4 plan (approved by AJ): `~/.claude/plans/alright-so-let-s-go-polymorphic-wilke
 - Timeouts after writes are `unknown` outcomes: reconcile (marker / deterministic ID) before any retry. Never duplicate.
 - Secrets: env or encrypted columns only (key outside DB). Never log, echo, export, or put in model context.
 - Contract fakes (`integrations/fakes.py`, `ScriptedLLM`) are labeled `simulated`; they never count as live verification.
+- Auth: setup without a token only from a *direct* loopback client in the local profile (any forwarding header or remote
+  mode ⇒ console setup token). Throttles are per client IP in `auth_attempts`; X-Forwarded-For is believed only from
+  `JARVIS_TRUSTED_PROXIES`. Sessions have idle + absolute limits. CSP stays `script-src 'self'` (no inline/third-party script).
+- User-supplied URLs (ICS, Canvas, SimpleFIN, …) go through `netguard` with `PinnedTransport` (DNS checked once, connect to
+  that IP). Short secrets in TEXT columns use `secrets.seal/unseal`.
+- Until V5 M2 lands classification routing and a CUI-authorized model path, do not load CUI into any install.
+- Bandit findings that are reviewed false positives get an inline `# nosec <id> <reason>`; never disable a check globally.
 - Default network binding is loopback. Do not deploy publicly, open ports, or spend on runtime API calls without AJ's explicit approval.
 
 ## Conventions

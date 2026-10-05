@@ -75,7 +75,7 @@ def _run(conn: sqlite3.Connection, mq: str, project_id: str | None, limit: int, 
         LEFT JOIN projects p ON p.id = d.project_id
         WHERE {' AND '.join(where)}
         ORDER BY rank
-        LIMIT ?"""
+        LIMIT ?"""  # nosec B608 clauses/placeholders from code; values bound
     params.append(limit)
     out = []
     for r in conn.execute(sql, params).fetchall():

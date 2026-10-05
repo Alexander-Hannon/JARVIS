@@ -207,14 +207,18 @@ def test_gzip_feed_and_url_never_logged(client, conn, caplog):
     conn.execute("COMMIT")
     caplog.set_level(logging.INFO)
     with respx.mock() as m:
-        m.get(url).mock(return_value=httpx.Response(200, content=gzip.compress(ICS), headers={"Content-Encoding": "gzip"}))
+        # The pinned transport connects to the checked IP and keeps the hostname for Host/SNI.
+        route = m.get(url.replace("uah.instructure.com", "93.184.216.34")).mock(
+            return_value=httpx.Response(200, content=gzip.compress(ICS), headers={"Content-Encoding": "gzip"}))
         from jarvis.security import netguard
-        real = netguard.validate_url
-        netguard.validate_url = lambda u, allow=None, resolver=None: u     # skip DNS in tests
+        real = netguard.resolve_public
+        netguard.resolve_public = lambda host, port, resolver=None: "93.184.216.34"     # skip DNS in tests
         try:
             res = service.ics_refresh(conn)
         finally:
-            netguard.validate_url = real
+            netguard.resolve_public = real
+    assert route.calls[0].request.headers["host"] == "uah.instructure.com"
+    assert route.calls[0].request.extensions["sni_hostname"] == "uah.instructure.com"
     assert res["items"] == 3
     assert "SECRETTOKEN123" not in caplog.text
     from jarvis.logsafe import RedactURLs

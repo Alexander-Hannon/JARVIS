@@ -11,6 +11,7 @@ from jarvis.core.db import jdump, jload, row, rows, tx
 from jarvis.core.util import audit, iso, now_iso, parse_iso, utcnow
 from jarvis.integrations import accounts as A
 from jarvis.integrations.base import ProviderError
+from jarvis.security.secrets import seal, unseal
 
 
 class SetupError(Exception):
@@ -147,7 +148,7 @@ def google_start(conn, purpose: str, origin: str | None = None) -> tuple[str, st
     ru = redirect_uri(origin)
     conn.execute("INSERT INTO oauth_states (state_hash, provider, purpose, code_verifier, redirect_uri, created_at, expires_at, "
                  "binding_hash) VALUES (?,?,?,?,?,?,?,?)",
-                 (hashlib.sha256(state.encode()).hexdigest(), "google", purpose, verifier, ru, now_iso(),
+                 (hashlib.sha256(state.encode()).hexdigest(), "google", purpose, seal(verifier), ru, now_iso(),
                   iso(utcnow() + timedelta(minutes=10)), hashlib.sha256(binding.encode()).hexdigest()))
     scopes = {"calendar": CALENDAR_SCOPES, "drive": DRIVE_SCOPES, "gmail": GMAIL_SCOPES}[purpose]
     return build_auth_url(s.google_client_id, ru, scopes, state, challenge), binding
@@ -168,7 +169,7 @@ def google_callback(conn, state: str, code: str | None, error: str | None, bindi
         raise SetupError("denied", f"Google returned: {error or 'no code'}")
     s = get_settings()
     try:
-        tokens = exchange_code(s.google_client_id, s.google_client_secret, st["redirect_uri"], code, st["code_verifier"])
+        tokens = exchange_code(s.google_client_id, s.google_client_secret, st["redirect_uri"], code, unseal(st["code_verifier"]))
         info = fetch_userinfo(tokens["access_token"])
     except ProviderError as e:
         raise SetupError("token_exchange_failed", f"Google token exchange failed ({e.kind}).") from e
@@ -395,7 +396,7 @@ def microsoft_start(conn, purpose: str = "mail", with_send: bool = False, origin
     ru = microsoft_redirect_uri(origin)
     conn.execute("INSERT INTO oauth_states (state_hash, provider, purpose, code_verifier, redirect_uri, created_at, expires_at, "
                  "binding_hash) VALUES (?,?,?,?,?,?,?,?)",
-                 (hashlib.sha256(state.encode()).hexdigest(), "microsoft", purpose + ("+send" if with_send else ""), verifier,
+                 (hashlib.sha256(state.encode()).hexdigest(), "microsoft", purpose + ("+send" if with_send else ""), seal(verifier),
                   ru, now_iso(), iso(utcnow() + timedelta(minutes=10)), hashlib.sha256(binding.encode()).hexdigest()))
     scopes = MAIL_SCOPES + ([SEND_SCOPE] if with_send else [])
     return build_auth_url(s.microsoft_tenant, s.microsoft_client_id, ru, scopes, state, challenge), binding
@@ -419,7 +420,7 @@ def microsoft_callback(conn, state: str, code: str | None, error: str | None, bi
     scopes = MAIL_SCOPES + ([SEND_SCOPE] if st["purpose"].endswith("+send") else [])
     try:
         tokens = exchange_code(s.microsoft_tenant, s.microsoft_client_id, s.microsoft_client_secret, st["redirect_uri"],
-                               code, st["code_verifier"], scopes)
+                               code, unseal(st["code_verifier"]), scopes)
         me = fetch_me(tokens["access_token"])
     except ProviderError as e:
         raise SetupError("token_exchange_failed", f"Microsoft token exchange failed ({e.kind}).") from e

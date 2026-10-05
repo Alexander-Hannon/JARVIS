@@ -186,7 +186,7 @@ def list_(conn, q: str | None = None, status: str | None = None, project_id: str
 
 def relevant(conn, text: str, project_ids: list[str] | None = None, limit: int = 8) -> list[dict]:
     """Bounded context for a run: pinned + FTS matches, active only, never other sensitive projects."""
-    pinned = rows(conn, "SELECT m.id, m.type, m.project_id, v.content, v.source_kind, v.observed_at FROM memories m "
+    pinned = rows(conn, "SELECT m.id, m.type, m.project_id, v.content, v.source_kind, v.observed_at FROM memories m "  # nosec B608 fixed clauses; values bound
                         "JOIN memory_versions v ON v.memory_id=m.id AND v.version=m.current_version "
                         "WHERE m.pinned=1 AND m.status='active' AND (m.project_id IS NULL OR m.project_id IN "
                         f"({','.join('?' * len(project_ids or []))})) LIMIT ?", [*(project_ids or []), limit])

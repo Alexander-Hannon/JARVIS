@@ -1394,6 +1394,28 @@ input[type='range'] {
 .dataflow li {
   margin: 8px 0;
 }
+.device-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.device-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+.device-list li > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .pair-code {
   display: flex;
   flex-direction: column;

@@ -6,11 +6,12 @@ import { ErrorBox } from '../components/ui';
 type Mode = 'login' | 'pair' | 'setup';
 
 export function AuthScreen({ status, onAuthed }: { status: AuthStatus; onAuthed: (csrf: string) => void }) {
-  const initial: Mode = !status.owner_exists && status.setup_allowed ? 'setup' : 'login';
+  const initial: Mode = !status.owner_exists ? 'setup' : 'login';
   const [mode, setMode] = useState<Mode>(initial);
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [code, setCode] = useState('');
+  const [setupToken, setSetupToken] = useState('');
   const [label, setLabel] = useState(() => (/iPhone|iPad|Android/i.test(navigator.userAgent) ? 'Phone' : 'Browser'));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
@@ -24,7 +25,7 @@ export function AuthScreen({ status, onAuthed }: { status: AuthStatus; onAuthed:
       if (mode === 'setup') {
         if (password.length < 12) throw new Error('Use at least 12 characters.');
         if (password !== confirm) throw new Error('Passwords do not match.');
-        r = await api.setup(password);
+        r = await api.setup(password, status.setup_token_required ? setupToken.trim() : undefined);
       } else if (mode === 'login') r = await api.login(password);
       else r = await api.pair(code.trim(), label.trim() || 'Device');
       setPassword('');
@@ -37,8 +38,6 @@ export function AuthScreen({ status, onAuthed }: { status: AuthStatus; onAuthed:
     }
   };
 
-  const noOwner = !status.owner_exists && !status.setup_allowed;
-
   return (
     <div className="auth-wrap">
       <form className="auth-card" onSubmit={submit} aria-labelledby="auth-title">
@@ -48,7 +47,15 @@ export function AuthScreen({ status, onAuthed }: { status: AuthStatus; onAuthed:
         {mode === 'setup' && (
           <>
             <h1 id="auth-title">Set up your owner password</h1>
-            <p className="muted">One-time local setup. This password protects commands, approvals, audio and files.</p>
+            <p className="muted">One-time setup. This password protects commands, approvals, audio and files.</p>
+            {status.setup_token_required && (
+              <label className="field">
+                <span>Setup token</span>
+                <input value={setupToken} onChange={(e) => setSetupToken(e.target.value)} required autoComplete="one-time-code"
+                       placeholder="XXXXXX-XXXXXX-…" data-testid="setup-token" />
+                <small className="muted">Shown in the terminal where <code>jarvis serve</code> runs, or run <code>jarvis setup-token</code> on that machine.</small>
+              </label>
+            )}
             <label className="field">
               <span>New password</span>
               <input type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={12} autoFocus />
@@ -70,7 +77,6 @@ export function AuthScreen({ status, onAuthed }: { status: AuthStatus; onAuthed:
         {mode === 'login' && (
           <>
             <h1 id="auth-title">Sign in</h1>
-            {noOwner && <p className="warn-text">No owner account exists yet. Open JARVIS on the host machine (localhost) to run first-time setup.</p>}
             <label className="field">
               <span>Password</span>
               <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus data-testid="password" />

@@ -45,7 +45,14 @@ Then set these in `.env`:
 JARVIS_REMOTE_MODE=true                         # secure cookies; required for any non-loopback origin
 JARVIS_PUBLIC_ORIGIN=https://jarvis.<tailnet>.ts.net
 JARVIS_ALLOWED_HOSTS=["127.0.0.1","localhost","jarvis.<tailnet>.ts.net"]
+JARVIS_TRUSTED_PROXIES=["127.0.0.1"]            # believe X-Forwarded-For from the local HTTPS front (per-device throttles + audit IPs)
 ```
+- **First-run setup through the HTTPS front:** every proxied request comes from 127.0.0.1, so it never counts as "this
+  machine". Setup asks for the one-time token that `jarvis serve` prints on its console, or that `jarvis setup-token`
+  prints. Remote mode always requires the token.
+- **Sessions:** a session ends after 7 days unused (`JARVIS_SESSION_IDLE_HOURS`) or 14 days in total
+  (`JARVIS_SESSION_TTL_HOURS`). Settings → Security & devices lists every signed-in device with its address and can
+  sign any of them out.
 Keep `jarvis serve` bound to 127.0.0.1 and let the HTTPS front forward to it. Pair the phone from the desktop: Settings → Pair device shows an 8-character, 10-minute code; on the phone choose "Pair with a code". For Google OAuth over this origin, add `https://jarvis.<tailnet>.ts.net/api/integrations/google/callback` to the OAuth client's redirect URIs.
 
 **iPhone specifics:**

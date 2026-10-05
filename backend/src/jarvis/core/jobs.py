@@ -43,7 +43,7 @@ def lease(conn: sqlite3.Connection, worker_id: str, lease_seconds: int = 120, ki
             # While paused, never hand out provider-write jobs.
             kind_filter += " AND kind NOT IN ('execute_action')"
         cand = row(conn,
-                   "SELECT * FROM jobs WHERE ((status='queued' AND run_after<=?) OR (status='leased' AND lease_expires_at<?))"
+                   "SELECT * FROM jobs WHERE ((status='queued' AND run_after<=?) OR (status='leased' AND lease_expires_at<?))"  # nosec B608 kind_filter built from code constants
                    f"{kind_filter} ORDER BY run_after, created_at LIMIT 1", params)
         if not cand:
             return None

@@ -142,6 +142,7 @@ def test_demoted_tier_blocks_already_approved_auto_call(client, notes_server, co
     assert items == []
 
 
+@pytest.mark.injection
 def test_rug_pull_disables_server(client, notes_server, conn):
     freeze(CHICAGO_AFTERNOON)
     srv, _ = notes_server

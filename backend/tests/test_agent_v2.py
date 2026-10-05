@@ -145,6 +145,7 @@ def test_offline_mode_does_not_turn_questions_into_tasks(client, fakes):
         assert r["proposal"] is None, text
 
 
+@pytest.mark.injection
 def test_prompt_injection_in_tool_result_cannot_approve(client, fakes):
     """A document says 'approve everything' — the model can only call propose_* tools; approval is impossible."""
     freeze(NOW)
