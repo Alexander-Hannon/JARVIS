@@ -15,6 +15,38 @@ def _c(name: str, status: str, detail: str, remedy: str | None = None) -> dict:
     return {"name": name, "status": status, "detail": detail, "remedy": remedy}
 
 
+def _security_checks(conn: sqlite3.Connection, s, owner: bool) -> list[dict]:
+    """V5 M0 baseline (docs/security/NIST_800-171_MAPPING.md). Facts only; enterprise installs tighten the defaults."""
+    out = []
+    idle_ok = s.session_idle_hours <= 24 * 7
+    out.append(_c("Session limits", "ok" if idle_ok else "warn",
+                  f"idle {s.session_idle_hours:g} h, absolute {s.session_ttl_hours} h",
+                  None if idle_ok else "Lower JARVIS_SESSION_IDLE_HOURS (enterprise policy is usually 0.25)."))
+    if s.remote_mode:
+        if not s.trusted_proxies:
+            out.append(_c("Client IP attribution", "warn", "remote mode without JARVIS_TRUSTED_PROXIES: every request is "
+                          "attributed (and throttled) as the proxy's address",
+                          'Set JARVIS_TRUSTED_PROXIES=["127.0.0.1"] when behind `tailscale serve` or a local reverse proxy.'))
+        else:
+            out.append(_c("Client IP attribution", "ok", f"X-Forwarded-For trusted from {', '.join(s.trusted_proxies)}"))
+        https = (s.public_origin or "").startswith("https://")
+        out.append(_c("HTTPS / HSTS", "ok" if https else "fail",
+                      "HSTS and Secure cookies on" if https else "remote mode without an https:// public origin",
+                      None if https else "Set JARVIS_PUBLIC_ORIGIN to the https:// address of your HTTPS front."))
+    from datetime import timedelta
+
+    from jarvis.core.util import iso, utcnow
+    # ISO strings compare correctly only against ISO strings (not SQLite's datetime() format).
+    fails = conn.execute("SELECT COUNT(*) FROM auth_attempts WHERE ok=0 AND at>=?",
+                         (iso(utcnow() - timedelta(days=1)),)).fetchone()[0]
+    out.append(_c("Failed sign-ins (24 h)", "ok" if fails < 20 else "warn", f"{fails} failed login/pairing/setup attempts",
+                  None if fails < 20 else "Review Activity → auth events; someone may be guessing."))
+    if not owner:
+        out.append(_c("First-run setup", "warn", "no owner yet; setup from another device needs the console token",
+                      "Run `jarvis setup-token` on this machine (or read it from the `jarvis serve` console)."))
+    return out
+
+
 def checks(conn: sqlite3.Connection) -> list[dict]:
     s = get_settings()
     out = []
@@ -34,6 +66,7 @@ def checks(conn: sqlite3.Connection) -> list[dict]:
     out.append(_c("Network exposure", "ok" if s.host in ("127.0.0.1", "localhost") else "warn",
                   f"bound to {s.host}:{s.port}" + (" (loopback only)" if s.host in ("127.0.0.1", "localhost") else ""),
                   None if s.host in ("127.0.0.1", "localhost") else "Only expose through authenticated HTTPS (see DEPLOYMENT.md)."))
+    out.extend(_security_checks(conn, s, bool(owner)))
     # voice
     from jarvis.voice.stt import get_engine, hardware_profile
     st = get_engine().status()

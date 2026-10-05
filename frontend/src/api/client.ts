@@ -120,10 +120,15 @@ const q = (params: Record<string, string | number | undefined | null>): string =
 export const api = {
   // Auth
   authStatus: () => request<T.AuthStatus>('/api/auth/status', { noAuthRedirect: true }),
-  setup: (password: string) => request<T.CsrfResponse>('/api/auth/setup', { json: { password }, noAuthRedirect: true }),
+  setup: (password: string, setup_token?: string) =>
+    request<T.CsrfResponse>('/api/auth/setup', { json: { password, setup_token: setup_token || undefined }, noAuthRedirect: true }),
   login: (password: string) => request<T.CsrfResponse>('/api/auth/login', { json: { password }, noAuthRedirect: true }),
   logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
   pairingCode: () => request<T.PairingCode>('/api/auth/pairing-code', { method: 'POST' }),
+  sessions: () => request<T.DeviceSession[]>('/api/auth/sessions'),
+  revokeSession: (id: string) =>
+    request<{ ok: boolean; current: boolean }>(`/api/auth/sessions/${encodeURIComponent(id)}/revoke`, { method: 'POST' }),
+  revokeOtherSessions: () => request<{ revoked: number }>('/api/auth/sessions/revoke-others', { method: 'POST' }),
   pair: (code: string, label: string) => request<T.CsrfResponse>('/api/auth/pair', { json: { code, label }, noAuthRedirect: true }),
 
   // Conversation / voice

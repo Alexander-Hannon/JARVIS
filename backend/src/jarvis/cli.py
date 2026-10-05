@@ -21,6 +21,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("gen-vapid", help="Generate Web Push VAPID keys for .env")
     sub.add_parser("setup-key", help="Create the token-encryption key file if missing")
     sub.add_parser("reset-password", help="Set a new owner password (local shell only) and sign out all devices")
+    sub.add_parser("setup-token", help="Print a one-time first-run setup token (needed when setting up over HTTPS)")
     sub.add_parser("backup", help="Create a backup")
     rs = sub.add_parser("restore", help="Restore a backup (neutralizes jobs/approvals, disables schedules)")
     rs.add_argument("backup_id")
@@ -35,6 +36,7 @@ def main(argv: list[str] | None = None) -> None:
         host = a.host or s.host
         if host not in ("127.0.0.1", "localhost", "::1") and not s.remote_mode:
             sys.exit("Refusing non-loopback bind without JARVIS_REMOTE_MODE=true and an HTTPS front (see DEPLOYMENT.md).")
+        _print_setup_token_if_needed()
         uvicorn.run("jarvis.api.main:app", host=host, port=a.port or s.port, proxy_headers=False, log_level="info")
     elif a.cmd == "worker":
         from jarvis.worker import main as wm
@@ -90,6 +92,9 @@ def main(argv: list[str] | None = None) -> None:
             conn.execute("UPDATE sessions SET revoked_at=? WHERE revoked_at IS NULL", (now_iso(),))
             audit(conn, "user", "auth.password_reset", "Owner password reset from local CLI; all sessions revoked")
         print("Password updated. All devices were signed out; re-pair your phone.")
+    elif a.cmd == "setup-token":
+        if not _print_setup_token_if_needed():
+            sys.exit("An owner already exists; setup tokens are only for first-run setup.")
     elif a.cmd == "backup":
         from jarvis.backup import create_backup
         print(json.dumps(create_backup("cli"), indent=2))
@@ -99,6 +104,22 @@ def main(argv: list[str] | None = None) -> None:
         if not a.yes:
             sys.exit("Re-run with --yes to restore (a pre-restore backup is taken first).")
         print(json.dumps(restore(a.backup_id), indent=2))
+
+
+def _print_setup_token_if_needed() -> bool:
+    """First-run only: issue a fresh setup token and show it on this console (never logged, only its hash stored)."""
+    from jarvis.config import get_settings
+    from jarvis.core.db import connection, tx
+    from jarvis.security import auth
+    get_settings().ensure_dirs()
+    with connection() as conn:
+        if auth.owner_exists(conn):
+            return False
+        with tx(conn):
+            token = auth.issue_setup_token(conn)
+    print(f"\n  JARVIS first-run setup token (valid 24 h, single use): {token}\n"
+          "  Only needed when setting up from another device or through HTTPS.\n", file=sys.stderr, flush=True)
+    return True
 
 
 if __name__ == "__main__":

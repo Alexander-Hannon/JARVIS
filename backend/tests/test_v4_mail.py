@@ -97,6 +97,7 @@ def test_agent_drafts_reply_and_executor_saves_draft_never_sends(client, mail, c
     assert d.thread_id and "grades to you by Friday" in d.body_text
 
 
+@pytest.mark.injection
 def test_recipient_must_come_from_aj_or_thread(client, mail):
     freeze(CHICAGO_AFTERNOON)
     ref = client.get("/api/inbox").json()["items"][0]["ref"]
@@ -216,6 +217,7 @@ def test_send_applied_but_response_lost_is_not_resent(client, mail, conn):
     assert len(mail.sent) == 1
 
 
+@pytest.mark.injection
 def test_draft_edit_allows_text_but_not_recipients(client, mail):
     freeze(CHICAGO_AFTERNOON)
     ref = client.get("/api/inbox").json()["items"][0]["ref"]

@@ -652,7 +652,7 @@ def delete_document(conn: sqlite3.Connection, document_id: str) -> dict:
         return {"deleted": False, "reason": "not found"}
     vers = rows(conn, "SELECT id, stored_path FROM source_versions WHERE document_id=?", (document_id,))
     ver_ids = [v["id"] for v in vers]
-    segs = rows(conn, f"SELECT id, image_path FROM evidence_segments WHERE source_version_id IN "
+    segs = rows(conn, f"SELECT id, image_path FROM evidence_segments WHERE source_version_id IN "  # nosec B608 placeholders only; values bound
                       f"({','.join('?' * len(ver_ids))})", ver_ids) if ver_ids else []
     originals = {v["stored_path"] for v in vers if v["stored_path"]}
     derived = {s["image_path"] for s in segs if s["image_path"]}

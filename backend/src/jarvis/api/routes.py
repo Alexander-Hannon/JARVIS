@@ -24,9 +24,11 @@ public = APIRouter(prefix="/api")
 router = APIRouter(prefix="/api")
 
 
-def _cookie(resp: Response, token: str) -> None:
+def _cookie(resp: Response, token: str, request: Request) -> None:
     s = get_settings()
-    resp.set_cookie(auth.SESSION_COOKIE, token, httponly=True, samesite="strict", secure=s.remote_mode,
+    # Secure whenever the browser is on HTTPS (directly, or the configured public origin), not just in remote mode.
+    secure = s.remote_mode or request.url.scheme == "https"
+    resp.set_cookie(auth.SESSION_COOKIE, token, httponly=True, samesite="strict", secure=secure,
                     max_age=s.session_ttl_hours * 3600, path="/")
 
 
@@ -39,9 +41,13 @@ class PasswordIn(BaseModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+class SetupIn(PasswordIn):
+    setup_token: str | None = Field(default=None, max_length=64)
+
+
 class PairIn(BaseModel):
-    code: str
-    label: str | None = None
+    code: str = Field(max_length=32)
+    label: str | None = Field(default=None, max_length=80)
 
 
 @public.get("/auth/status")
@@ -49,41 +55,60 @@ def auth_status(request: Request, conn=Depends(db)):
     s = auth.session_from_request(conn, request)
     exists = auth.owner_exists(conn)
     return {"owner_exists": exists, "authenticated": bool(s), "csrf_token": s["csrf_token"] if s else None,
-            "remote_mode": get_settings().remote_mode, "setup_allowed": (not exists) and auth.is_loopback(request)}
+            "remote_mode": get_settings().remote_mode,
+            "setup_allowed": (not exists) and auth.setup_allowed_without_token(request),
+            "setup_token_required": (not exists) and not auth.setup_allowed_without_token(request)}
+
+
+def _attempt(conn, kind: str, request: Request, fn):
+    """Run an auth step under the per-IP throttle; the attempt is recorded even when the step fails."""
+    with tx(conn):
+        auth.check_throttle(conn, kind, request)
+    try:
+        with tx(conn):
+            out = fn()
+    except HTTPException as e:
+        if e.status_code in (401, 403):
+            with tx(conn):
+                auth.record_attempt(conn, kind, request, ok=False)
+        raise
+    with tx(conn):
+        auth.record_attempt(conn, kind, request, ok=True)
+    return out
 
 
 @public.post("/auth/setup")
-def auth_setup(body: PasswordIn, request: Request, response: Response, conn=Depends(db)):
-    if not auth.is_loopback(request):
-        raise HTTPException(403, "First-run setup is only allowed from the machine running Jarvis.")
-    with tx(conn):
+def auth_setup(body: SetupIn, request: Request, response: Response, conn=Depends(db)):
+    def step():
+        if not auth.setup_allowed_without_token(request):
+            if not body.setup_token or not auth.consume_setup_token(conn, body.setup_token):
+                raise HTTPException(403, "Setup needs the one-time setup token printed in the console where "
+                                         "`jarvis serve` runs (or run `jarvis setup-token` on that machine).")
         auth.create_owner(conn, body.password)
-        _, token, csrf = auth.create_session(conn, "setup")
-    _cookie(response, token)
+        audit(conn, "user", "auth.setup_context", "Owner setup", data=auth.request_context(request))
+        return auth.create_session(conn, "setup", request)
+    _, token, csrf = _attempt(conn, "setup", request, step)
+    _cookie(response, token, request)
     return {"csrf_token": csrf}
 
 
-_login_attempts: list[float] = []
-
-
 @public.post("/auth/login")
-def auth_login(body: PasswordIn, response: Response, conn=Depends(db)):
-    now = time.monotonic()
-    _login_attempts[:] = [t for t in _login_attempts if now - t < 300]
-    if len(_login_attempts) >= 10:
-        raise HTTPException(429, "Too many attempts; wait a few minutes.")
-    _login_attempts.append(now)
-    with tx(conn):
-        _, token, csrf = auth.login(conn, body.password)
-    _cookie(response, token)
+def auth_login(body: PasswordIn, request: Request, response: Response, conn=Depends(db)):
+    def step():
+        auth.revoke_request_session(conn, request)
+        return auth.login(conn, body.password, request=request)
+    _, token, csrf = _attempt(conn, "login", request, step)
+    _cookie(response, token, request)
     return {"csrf_token": csrf}
 
 
 @public.post("/auth/pair")
-def auth_pair(body: PairIn, response: Response, conn=Depends(db)):
-    with tx(conn):
-        _, token, csrf = auth.redeem_pairing_code(conn, body.code, body.label)
-    _cookie(response, token)
+def auth_pair(body: PairIn, request: Request, response: Response, conn=Depends(db)):
+    def step():
+        auth.revoke_request_session(conn, request)
+        return auth.redeem_pairing_code(conn, body.code, body.label, request)
+    _, token, csrf = _attempt(conn, "pair", request, step)
+    _cookie(response, token, request)
     return {"csrf_token": csrf}
 
 
@@ -115,6 +140,35 @@ def auth_logout(response: Response, session=Depends(require_session), conn=Depen
     conn.execute("UPDATE sessions SET revoked_at=? WHERE id=?", (now_iso(), session["id"]))
     response.delete_cookie(auth.SESSION_COOKIE, path="/")
     return {"ok": True}
+
+
+@router.get("/auth/sessions")
+def list_sessions(session=Depends(require_session), conn=Depends(db)):
+    """Signed-in devices (NIST 3.1.12): what's connected, from where, and when it was last used."""
+    out = rows(conn, "SELECT id, label, created_at, last_seen_at, expires_at, ip, user_agent FROM sessions "
+                     "WHERE revoked_at IS NULL AND expires_at>? ORDER BY COALESCE(last_seen_at, created_at) DESC",
+               (now_iso(),))
+    return [s | {"current": s["id"] == session["id"]} for s in out]
+
+
+@router.post("/auth/sessions/{sid}/revoke")
+def revoke_session(sid: str, request: Request, session=Depends(require_session), conn=Depends(db)):
+    with tx(conn):
+        n = conn.execute("UPDATE sessions SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (now_iso(), sid)).rowcount
+        if not n:
+            raise HTTPException(404, "No such active session.")
+        audit(conn, "user", "auth.session_revoked", "Device signed out from Settings", "session", sid,
+              data=auth.request_context(request))
+    return {"ok": True, "current": sid == session["id"]}
+
+
+@router.post("/auth/sessions/revoke-others")
+def revoke_other_sessions(request: Request, session=Depends(require_session), conn=Depends(db)):
+    with tx(conn):
+        n = conn.execute("UPDATE sessions SET revoked_at=? WHERE id<>? AND revoked_at IS NULL",
+                         (now_iso(), session["id"])).rowcount
+        audit(conn, "user", "auth.sessions_revoked", f"Signed out {n} other device(s)", data=auth.request_context(request))
+    return {"revoked": n}
 
 
 @router.post("/auth/pairing-code")
@@ -567,7 +621,7 @@ def plan_history(d: str | None = None, conn=Depends(db)):
 @router.get("/briefings")
 def briefings(kind: str | None = None, limit: int = 20, conn=Depends(db)):
     from jarvis.briefings.workflows import _view
-    q = "SELECT * FROM briefings" + (" WHERE kind=?" if kind else "") + " ORDER BY created_at DESC LIMIT ?"
+    q = "SELECT * FROM briefings" + (" WHERE kind=?" if kind else "") + " ORDER BY created_at DESC LIMIT ?"  # nosec B608 fixed clause; values bound
     return [_view(b) for b in rows(conn, q, ((kind,) if kind else ()) + (min(limit, 100),))]
 
 
@@ -756,7 +810,7 @@ def patch_project(pid: str, body: ProjectPatch, conn=Depends(db)):
         raise HTTPException(400, "Notion link must be https://")
     fields = body.model_dump(exclude_none=True)
     if fields:
-        conn.execute(f"UPDATE projects SET {', '.join(f'{k}=?' for k in fields)}, updated_at=? WHERE id=?",
+        conn.execute(f"UPDATE projects SET {', '.join(f'{k}=?' for k in fields)}, updated_at=? WHERE id=?",  # nosec B608 columns = ProjectPatch field names; values bound
                      (*fields.values(), now_iso(), pid))
     return row(conn, "SELECT * FROM projects WHERE id=?", (pid,))
 
@@ -1222,7 +1276,7 @@ def activity(limit: int = 100, actor: str | None = None, conn=Depends(db)):
     # actor filters the audit trail: user (AJ) | policy | mission | channel | system | worker | model
     ev = [] if actor else rows(conn, "SELECT created_at at, kind, message, run_id FROM run_events ORDER BY id DESC LIMIT ?",
                                (min(limit, 500),))
-    au = rows(conn, "SELECT at, actor, kind, summary message, entity_type, entity_id FROM audit_events "
+    au = rows(conn, "SELECT at, actor, kind, summary message, entity_type, entity_id FROM audit_events "  # nosec B608 fixed clause; values bound
                     + ("WHERE actor=? " if actor else "") + "ORDER BY id DESC LIMIT ?",
               ((actor, min(limit, 500)) if actor else (min(limit, 500),)))
     return sorted(ev + au, key=lambda e: e["at"], reverse=True)[:limit]

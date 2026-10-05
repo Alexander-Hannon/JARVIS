@@ -71,6 +71,7 @@ def test_run_write_read_and_history(client, rt):
     assert [h["kind"] for h in hist][:2] == ["exec", "write"] and hist[0]["detail"] == "python3 calc.py"
 
 
+@pytest.mark.injection
 def test_network_window_needs_explicit_approval_and_scopes_browser(client, conn, rt):
     freeze(CHICAGO_AFTERNOON)
     _, llm = agent(client, "open the parking page", tu(0, "browser_open", {"url": "https://www.uah.edu/parking"}))

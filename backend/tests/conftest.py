@@ -14,6 +14,7 @@ for _k in [k for k in os.environ if k.startswith("JARVIS_") and k != "JARVIS_ENV
 import pytest
 
 PASSWORD = "correct horse battery"
+LOOPBACK = ("127.0.0.1", 50000)   # a direct local client (TestClient's default peer name is not loopback)
 
 
 @pytest.fixture
@@ -83,7 +84,7 @@ class Api:
 @pytest.fixture
 def client(app):
     from fastapi.testclient import TestClient
-    c = TestClient(app)
+    c = TestClient(app, client=LOOPBACK)
     r = c.post("/api/auth/setup", json={"password": PASSWORD})
     assert r.status_code == 200, r.text
     return Api(c, r.json()["csrf_token"])

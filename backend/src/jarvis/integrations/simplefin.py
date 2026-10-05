@@ -40,7 +40,8 @@ def claim(claim_url: str, client: httpx.Client | None = None, resolver=None) -> 
         validate_url(claim_url, resolver=resolver or socket.getaddrinfo)
     except UnsafeURL as e:
         raise SetupTokenError(str(e)) from e
-    c = client or httpx.Client(timeout=20.0)
+    from jarvis.security.netguard import pinned_client
+    c = client or pinned_client(20.0, resolver=resolver or socket.getaddrinfo)
     try:
         resp = c.post(claim_url, headers={"Content-Length": "0"})
     finally:
@@ -64,7 +65,8 @@ class SimpleFinAdapter:
         p = urlsplit(access_url)
         self._auth = (p.username or "", p.password or "")
         self._base = urlunsplit((p.scheme, p.hostname + (f":{p.port}" if p.port else ""), p.path.rstrip("/"), "", ""))
-        self.client = client or httpx.Client(timeout=30.0)
+        from jarvis.security.netguard import pinned_client
+        self.client = client or pinned_client(30.0)
 
     def __repr__(self) -> str:
         return "SimpleFinAdapter(<access url hidden>)"

@@ -229,7 +229,7 @@ def computer(conn, run_id: str | None, action: str, inp: dict) -> dict:
         return {"image": png, "shot_id": sid}
     if action == "zoom":
         x0, y0, x1, y1 = (int(v) for v in inp["region"])
-        out = f"/tmp/zoom_{new_id('z')}.png"
+        out = f"/tmp/zoom_{new_id('z')}.png"  # nosec B108 path inside the sandbox container, not the host
         res = rt.exec(f"import -window root -crop {x1 - x0}x{y1 - y0}+{x0}+{y0} -resize 1280x800 {out}", 30)
         _log(conn, run_id, "computer", detail, res, output="zoom")
         img = rt.read_bytes(out, 10 * 1024 * 1024) if res.exit_code == 0 else None

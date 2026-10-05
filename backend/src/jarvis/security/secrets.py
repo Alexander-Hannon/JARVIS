@@ -57,6 +57,15 @@ def decrypt(ciphertext: bytes) -> str:
         raise SecretKeyUnavailable("Stored credential could not be decrypted with the current key.") from e
 
 
+def seal(plaintext: str) -> str:
+    """Encrypt a short secret for a TEXT column (e.g. PKCE verifiers)."""
+    return encrypt(plaintext).decode()
+
+
+def unseal(sealed: str) -> str:
+    return decrypt(sealed.encode())
+
+
 def key_status() -> dict:
     s = get_settings()
     if s.secret_key:

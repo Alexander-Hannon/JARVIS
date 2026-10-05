@@ -22,7 +22,9 @@ class CanvasAdapter:
 
     def __init__(self, base_url: str, token: str, client: httpx.Client | None = None):
         self.base = base_url.rstrip("/")
-        self.http = JsonClient(self.base + "/api/v1", {"Authorization": f"Bearer {token}"}, "Canvas", client=client)
+        from jarvis.security.netguard import pinned_client
+        self.http = JsonClient(self.base + "/api/v1", {"Authorization": f"Bearer {token}"}, "Canvas",
+                               client=client or pinned_client())
 
     def _all(self, path: str, params: dict | list | None = None, cap: int = 200) -> list[dict]:
         out: list[dict] = []

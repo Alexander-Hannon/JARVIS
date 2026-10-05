@@ -24,7 +24,11 @@ class Settings(BaseSettings):
     remote_mode: bool = False
     public_origin: str | None = None          # e.g. https://jarvis.example.ts.net (remote profile)
     allowed_hosts: list[str] = Field(default_factory=lambda: ["127.0.0.1", "localhost"])
-    session_ttl_hours: int = 24 * 14
+    session_ttl_hours: int = 24 * 14          # absolute lifetime (NIST 800-171 3.1.11)
+    session_idle_hours: float = 24 * 7        # signed out after this long unused; enterprises set e.g. 0.25 (3.1.10)
+    # Reverse proxies (e.g. 127.0.0.1 for `tailscale serve`) whose X-Forwarded-For is believed for client-IP
+    # attribution and throttling. A forwarded request is never treated as "loopback" for setup.
+    trusted_proxies: list[str] = Field(default_factory=list)
     # Secret key for encrypting stored tokens. If unset, read from <data_dir>/secret.key
     # (created on setup with 0600 perms). Never stored in the database.
     secret_key: str | None = None

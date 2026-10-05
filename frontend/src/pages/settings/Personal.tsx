@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../../api/client';
-import type { PairingCode, VaultStatus, VoiceStatus } from '../../api/types';
+import type { DeviceSession, PairingCode, VaultStatus, VoiceStatus } from '../../api/types';
 import { SpeechControls } from '../../components/SpeechControls';
 import { Async, Badge, Card, ErrorBox, KV, StateBadge, Toggle } from '../../components/ui';
 import { fmtDateTime, fmtRelative } from '../../lib/format';
@@ -237,6 +237,26 @@ export function LocalOpsSection() {
 export function SecuritySection({ onLoggedOut }: { onLoggedOut: () => void }) {
   const [code, setCode] = useState<PairingCode | null>(null);
   const [err, setErr] = useState<unknown>(null);
+  const devices = useAsync(() => api.sessions(), []);
+  const revoke = async (id: string) => {
+    setErr(null);
+    try {
+      await api.revokeSession(id);
+      await devices.reload();
+    } catch (e) {
+      setErr(e);
+    }
+  };
+  const revokeOthers = async () => {
+    if (!window.confirm('Sign out every other device? They will need a new pairing code or the password.')) return;
+    setErr(null);
+    try {
+      await api.revokeOtherSessions();
+      await devices.reload();
+    } catch (e) {
+      setErr(e);
+    }
+  };
   return (
     <Card title="Security & devices">
       <h4>Pair a phone</h4>
@@ -262,6 +282,34 @@ export function SecuritySection({ onLoggedOut }: { onLoggedOut: () => void }) {
             expires {fmtRelative(code.expires_at)} ({fmtDateTime(code.expires_at)})
           </span>
         </div>
+      )}
+      <h4>Signed-in devices</h4>
+      <Async state={devices} empty="No active sessions.">
+        {(list: DeviceSession[]) => (
+          <ul className="device-list" data-testid="device-list">
+            {list.map((d) => (
+              <li key={d.id}>
+                <div>
+                  <strong>{d.label || 'Device'}</strong> {d.current && <Badge tone="ok">this device</Badge>}
+                  <div className="muted small">
+                    {d.ip || 'unknown address'} · last used {fmtRelative(d.last_seen_at || d.created_at)} · signed in{' '}
+                    {fmtDateTime(d.created_at)}
+                  </div>
+                </div>
+                {!d.current && (
+                  <button type="button" className="btn btn-small btn-danger-ghost" onClick={() => void revoke(d.id)}>
+                    Sign out
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Async>
+      {(devices.data?.length ?? 0) > 1 && (
+        <button type="button" className="btn btn-danger-ghost" onClick={() => void revokeOthers()}>
+          Sign out all other devices
+        </button>
       )}
       <h4>Session</h4>
       <button

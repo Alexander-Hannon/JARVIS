@@ -1,5 +1,66 @@
 # BUILD_STATUS
 
+## Session 10 update (2026-10-05): V5 kickoff — branch cleanup, roadmap, M0 security baseline
+- **Branches:** `feat/jarvis-v1-build` was fully merged into `main` (PRs #7–#11; file diff empty) and is deleted locally
+  and on GitHub. Local `main` was fast-forwarded 34 commits. V5 work lives on `feat/v5-overseer`.
+- **V5 "Overseer" roadmap** (`docs/V5_ROADMAP.md`), with AJ's decisions:
+  - per-customer installs (one org per DB; GovCloud, Azure Gov, on-prem or air-gapped)
+  - model paths: Bedrock GovCloud (the CUI path), Anthropic API, self-hosted, Vertex/Azure
+  - a personal edition from the same code
+  - security core first: M0 baseline → M1 identity/RBAC/Postgres → M2 encryption + CUI boundary → M3 overseer core
+    (Company Brain, Situations, Overwatch HUD, agent crews, Compliance Copilot) → M4 enterprise connectors →
+    M5 packaging
+- **M0 fixes from the security audit:**
+  - **Setup takeover behind the HTTPS front (real bug).** `tailscale serve` forwards from 127.0.0.1, so before an owner
+    existed anyone reaching the proxy could run setup. Now any forwarded request, or remote mode, needs a one-time
+    console token (`jarvis serve` prints it; `jarvis setup-token`). Only its hash is stored. The UI shows a token field.
+    `"testclient"` no longer counts as loopback.
+  - **Sessions.** Idle limit (7 days, `JARVIS_SESSION_IDLE_HOURS`) plus the 14-day absolute limit. An idle session is
+    revoked for good. Login and pairing revoke the session the browser already carried. Sessions record IP and user agent.
+  - **Devices.** Settings → Security & devices lists signed-in devices and can sign out one or all others
+    (`/api/auth/sessions…`).
+  - **Throttles.** Stored in the DB (survive restarts) and per client IP:
+    - login: 10 failures per 15 min
+    - pairing: 5 per IP, or 30 overall
+    - setup: 10
+    - after 30 failed logins across IPs, only devices that signed in before may keep trying, so an attacker can't lock
+      out the owner
+    - failed attempts are now actually audited, with IP and user agent (they used to be rolled back with the request)
+  - **Client IP.** `X-Forwarded-For` is believed only from `JARVIS_TRUSTED_PROXIES`, using the right-most untrusted hop.
+  - **Headers.** Strict CSP (`script-src 'self'`, `frame-ancestors 'none'`, …), COOP, HSTS on HTTPS. The `Secure`
+    cookie now follows the actual scheme.
+  - **SSRF.** New `PinnedTransport`: DNS is resolved and checked once per request (every redirect hop and pagination
+    link), the connection goes to that IP, and the hostname is kept for Host, SNI and certificate checks. This closes the
+    DNS-rebinding gap. Used for ICS feeds, Canvas and SimpleFIN. Still open: the MCP HTTP client (M2).
+  - **Secrets.** PKCE verifiers are sealed at rest (`secrets.seal/unseal`). Migration `0007` drops pending OAuth states
+    (10-minute lifetime). The password minimum is now 12 characters, matching the UI and CLI.
+  - **Doctor** reports session limits, client-IP attribution, HTTPS/HSTS, failed sign-ins in 24 h, and the first-run token.
+- **Security program:**
+  - `.github/workflows/ci.yml`:
+    - ruff, pytest, the separate `injection` suite
+    - pip-audit, bandit (medium+), semgrep, gitleaks over full history
+    - CycloneDX SBOMs, npm audit, tsc/build, Playwright
+  - Dependabot for uv, npm and actions.
+  - `docs/security/`: `THREAT_MODEL.md` (STRIDE plus AI threats), `NIST_800-171_MAPPING.md` (all 110 requirements: 11
+    in place, 41 partial, 23 planned, 35 customer-only), `INCIDENT_RESPONSE.md`; plus `SECURITY.md`.
+  - Bandit: 13 SQL findings and 2 `/tmp` findings reviewed. All are false positives (code-built columns with bound
+    values; paths inside the sandbox). Each carries an inline `# nosec <id> <reason>` rather than a global skip.
+- **Verification:**
+  - Backend 362 passed (+22 in `test_v5_security.py`, 11 tests tagged `injection`); ruff clean.
+  - Frontend tsc + build pass; UI (mocked) 20 passed (+1 devices).
+  - Local scans: gitleaks no leaks, semgrep 0 findings, bandit clean at medium+, npm audit 0.
+  - pip-audit couldn't run on this host (no `python3-venv`); it runs in CI.
+  - Migration `0007` applied to a **copy** of the real DB: v6→v7, row counts kept (sessions 4, audit 123, proposals 16,
+    approvals 10), integrity ok, no FK violations; only the 9 stale OAuth states dropped.
+  - Live smoke run (`jarvis serve` on a throwaway data dir, Chromium simulating a proxied client):
+    - a wrong setup token gets 403 and the console token gets 200
+    - all 11 routes render signed in
+    - **CSP found one real issue live:** Vite inlines fonts as `data:` URIs. `font-src` now allows `data:`, with a
+      regression assert.
+- **AJ to do:** add `JARVIS_TRUSTED_PROXIES=["127.0.0.1"]` to `.env`. Doctor on a copy of the real setup flags it: in remote
+  mode behind Tailscale without it, every request is throttled and audited as 127.0.0.1.
+- **Do not load CUI yet:** model prompts still go to the commercial Anthropic API until M2.
+
 ## Session 9 update (2026-10-01): V4.2 — voice-first Command, plain-language sandbox, Gmail fix, live plan
 - **Gmail "redirect_uri_mismatch":** cause: with `JARVIS_PUBLIC_ORIGIN` set to the Tailscale address, every OAuth start
   sent the `https://…ts.net/…/callback` redirect, which isn't registered in the Google OAuth client (only localhost is).

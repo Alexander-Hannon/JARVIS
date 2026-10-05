@@ -130,7 +130,7 @@ class DockerRuntime:
             self._docker("rm", "-f", CONTAINER, check=False)
             self._docker("run", "-d", "--name", CONTAINER, "--network", NETWORK, "--cpus", "2", "--memory", "2g",
                          "--pids-limit", "512", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only",
-                         "--tmpfs", "/tmp:size=1g,uid=1000", "--mount", f"type=volume,src={VOLUME},dst=/workspace",
+                         "--tmpfs", "/tmp:size=1g,uid=1000", "--mount", f"type=volume,src={VOLUME},dst=/workspace",  # nosec B108 tmpfs inside the sandbox container, not the host
                          "-e", "HTTP_PROXY=http://egress:3128", "-e", "HTTPS_PROXY=http://egress:3128",
                          "-e", "http_proxy=http://egress:3128", "-e", "https_proxy=http://egress:3128",
                          "--user", "1000:1000", IMAGE)

@@ -19,6 +19,7 @@ from jarvis.core.db import row, tx
 from jarvis.core.util import iso, now_iso, parse_iso, utcnow
 from jarvis.integrations import accounts as A
 from jarvis.integrations.base import ProviderError
+from jarvis.security.secrets import seal, unseal
 from jarvis.integrations.service import SetupError, integration_view, redirect_uri
 
 
@@ -288,7 +289,7 @@ def spotify_start(conn) -> tuple[str, str]:
     ru = spotify_redirect_uri()
     conn.execute("INSERT INTO oauth_states (state_hash, provider, purpose, code_verifier, redirect_uri, created_at, expires_at, "
                  "binding_hash) VALUES (?,?,?,?,?,?,?,?)",
-                 (hashlib.sha256(state.encode()).hexdigest(), "spotify", "playback", verifier, ru, now_iso(),
+                 (hashlib.sha256(state.encode()).hexdigest(), "spotify", "playback", seal(verifier), ru, now_iso(),
                   iso(utcnow() + timedelta(minutes=10)), hashlib.sha256(binding.encode()).hexdigest()))
     return build_auth_url(s.spotify_client_id, ru, state, challenge), binding
 
@@ -308,7 +309,7 @@ def spotify_callback(conn, state: str, code: str | None, error: str | None, bind
         raise SetupError("denied", f"Spotify returned: {error or 'no code'}")
     s = get_settings()
     try:
-        tokens = exchange_code(s.spotify_client_id, st["redirect_uri"], code, st["code_verifier"])
+        tokens = exchange_code(s.spotify_client_id, st["redirect_uri"], code, unseal(st["code_verifier"]))
         me = SpotifyAdapter(SpotifyCredentials(tokens, s.spotify_client_id)).whoami()
     except ProviderError as e:
         raise SetupError("token_exchange_failed", f"Spotify token exchange failed ({e.kind}).") from None

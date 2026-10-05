@@ -68,7 +68,7 @@ def update_schedule(conn, sched_id: str, patch: dict) -> dict:
             fields["enabled"] = int(bool(fields["enabled"]))
         if fields:
             sets = ", ".join(f"{k}=?" for k in fields)
-            conn.execute(f"UPDATE schedules SET {sets}, row_version=row_version+1, updated_at=? WHERE id=?",
+            conn.execute(f"UPDATE schedules SET {sets}, row_version=row_version+1, updated_at=? WHERE id=?",  # nosec B608 columns allowlisted above; values bound
                          (*fields.values(), now_iso(), sched_id))
         # Activation starts from NOW: enabling never back-fills past occurrences.
         refresh_next(conn, sched_id)

@@ -16,6 +16,12 @@ from jarvis.security import auth, secrets
 
 log = logging.getLogger("jarvis.api")
 
+# The built SPA loads only same-origin bundles; nothing is inline or third-party. data:/blob: cover recorded audio,
+# local TTS clips, sandbox screenshots and the fonts Vite inlines. style 'unsafe-inline' is for React style attributes only (no script).
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+       "media-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; font-src 'self' data:; "
+       "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+
 
 def allowed_origins() -> set[str]:
     s = get_settings()
@@ -75,6 +81,10 @@ def create_app() -> FastAPI:
         resp.headers["Referrer-Policy"] = "no-referrer"
         resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["Permissions-Policy"] = "microphone=(self), camera=(), geolocation=()"
+        resp.headers["Content-Security-Policy"] = CSP
+        resp.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        if (s.remote_mode and (s.public_origin or "").startswith("https://")) or request.url.scheme == "https":
+            resp.headers["Strict-Transport-Security"] = "max-age=31536000"
         if request.url.path.startswith("/api"):
             resp.headers["Cache-Control"] = "no-store"
         return resp
