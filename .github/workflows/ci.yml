@@ -58,8 +58,8 @@ jobs:
           ./gitleaks git --redact --no-banner .
       - name: SBOM (CycloneDX)
         run: |
-          (cd backend && uvx --from cyclonedx-bom cyclonedx-py environment --of JSON -o ../sbom-backend.cdx.json "$(uv python find)" || \
-           uvx --from cyclonedx-bom cyclonedx-py requirements /tmp/requirements.txt --of JSON -o ../sbom-backend.cdx.json)
+          # From the locked requirements exported above (this job doesn't install the project).
+          uvx --from cyclonedx-bom cyclonedx-py requirements /tmp/requirements.txt --of JSON -o sbom-backend.cdx.json
           (cd frontend && npx --yes @cyclonedx/cyclonedx-npm --package-lock-only --omit dev --output-file ../sbom-frontend.cdx.json)
       - uses: actions/upload-artifact@v4
         with:
