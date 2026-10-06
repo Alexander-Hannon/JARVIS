@@ -56,9 +56,22 @@ def require_session(request: Request, conn=Depends(db)) -> dict:
     return s
 
 
-def principal(session: dict = Depends(require_session)) -> Principal:
-    """The acting user. FastAPI caches `require_session` per request, so this adds no extra lookup."""
+def principal_enrolling(session: dict = Depends(require_session)) -> Principal:
+    """The signed-in user even if they still owe a second factor — only for the MFA enrollment endpoints."""
     return from_session(session)
+
+
+def principal(session: dict = Depends(require_session), conn=Depends(db)) -> Principal:
+    """The acting user. Someone whose role requires MFA must have used it for this session (or be on a device paired
+    from such a session); until then only enrollment works (800-171 3.5.3)."""
+    from jarvis.security import mfa
+    p = from_session(session)
+    if mfa.required(p.role) and p.auth_level not in ("mfa", "device"):
+        enrolled = mfa.enrolled(conn, p.user_id)
+        raise HTTPException(403, {"code": "mfa_required" if enrolled else "mfa_enrollment_required",
+                                  "message": "Sign in again with your second factor." if enrolled else
+                                  "Set up an authenticator app or passkey to continue."})
+    return p
 
 
 def require(perm: str):

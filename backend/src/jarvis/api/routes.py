@@ -14,7 +14,7 @@ from jarvis.actions import executor
 from jarvis.actions import proposals as P
 from jarvis.agents import chief
 from jarvis.agents import context as ctx
-from jarvis.api.app import db, principal, require, require_session
+from jarvis.api.app import db, principal, principal_enrolling, require, require_session
 from jarvis.config import get_settings
 from jarvis.core.db import jdump, jload, row, rows, tx
 from jarvis.core.util import audit, new_id, now_iso, record_latency
@@ -66,12 +66,19 @@ def me_view(s: dict) -> dict:
             "auth_level": s.get("auth_level") or "password"}
 
 
+def _mfa_state(conn, s: dict) -> dict:
+    from jarvis.security import mfa
+    req = mfa.required(s["role"])
+    enrolled = mfa.enrolled(conn, s["user_id"])
+    return {"required": req, "enrolled": enrolled, "satisfied": (not req) or s.get("auth_level") in ("mfa", "device")}
+
+
 @public.get("/auth/status")
 def auth_status(request: Request, conn=Depends(db)):
     s = auth.session_from_request(conn, request)
     exists = auth.owner_exists(conn)
     return {"owner_exists": exists, "authenticated": bool(s), "csrf_token": s["csrf_token"] if s else None,
-            "user": me_view(s) if s else None,
+            "user": me_view(s) if s else None, "mfa": _mfa_state(conn, s) if s else None,
             "remote_mode": get_settings().remote_mode,
             "setup_allowed": (not exists) and auth.setup_allowed_without_token(request),
             "setup_token_required": (not exists) and not auth.setup_allowed_without_token(request)}
@@ -113,11 +120,42 @@ def auth_setup(body: SetupIn, request: Request, response: Response, conn=Depends
 
 @public.post("/auth/login")
 def auth_login(body: LoginIn, request: Request, response: Response, conn=Depends(db)):
+    """Password first. If the account has a second factor, the answer is a short-lived MFA challenge (no session yet);
+    POST /auth/mfa/verify finishes the sign-in."""
+    from jarvis.security import mfa
+
     def step():
         user = auth.check_credentials(conn, body.username, body.password, request)
+        if mfa.enrolled(conn, user["id"]):
+            return mfa.start_login(conn, request, user)
         auth.revoke_request_session(conn, request)
         return auth.complete_login(conn, user, request)
-    _, token, csrf = _attempt(conn, "login", request, step, username=body.username)
+    out = _attempt(conn, "login", request, step, username=body.username)
+    if isinstance(out, dict):
+        return out
+    _, token, csrf = out
+    _cookie(response, token, request)
+    return {"csrf_token": csrf}
+
+
+class MfaVerifyIn(BaseModel):
+    challenge_id: str = Field(max_length=64)
+    method: str = Field(pattern="^(totp|webauthn|recovery)$")
+    code: str | None = Field(None, max_length=32)
+    credential: dict[str, Any] | None = None
+
+
+@public.post("/auth/mfa/verify")
+def auth_mfa_verify(body: MfaVerifyIn, request: Request, response: Response, conn=Depends(db)):
+    from jarvis.security import mfa
+    ch = mfa.challenge_user(conn, body.challenge_id)
+    uname = ch["username"] if ch else None
+
+    def step():
+        user = mfa.finish_login(conn, request, body.challenge_id, body.method, body.code, body.credential)
+        auth.revoke_request_session(conn, request)
+        return auth.complete_login(conn, user, request, auth_level="mfa")
+    _, token, csrf = _attempt(conn, "mfa", request, step, username=uname)
     _cookie(response, token, request)
     return {"csrf_token": csrf}
 
@@ -239,6 +277,91 @@ def change_password(body: PasswordChangeIn, request: Request, me: Principal = De
         audit(conn, "user", "auth.password_changed", f"Password changed; {n} other device(s) signed out",
               data=auth.request_context(request), uid=me.user_id)
     return {"ok": True, "signed_out": n}
+
+
+# ---------------------------------------------------------------- second factors
+class MfaLabelIn(BaseModel):
+    label: str = Field("", max_length=60)
+
+
+class TotpConfirmIn(BaseModel):
+    id: str = Field(max_length=64)
+    code: str = Field(max_length=12)
+
+
+class WebauthnFinishIn(BaseModel):
+    challenge_id: str = Field(max_length=64)
+    credential: dict[str, Any]
+
+
+def _after_enroll(conn, me: Principal) -> dict:
+    """Proving a new factor upgrades this session; the first one also issues recovery codes (shown once)."""
+    from jarvis.security import mfa
+    conn.execute("UPDATE sessions SET auth_level='mfa' WHERE id=?", (me.session_id,))
+    codes = mfa.new_recovery_codes(conn, me.user_id) if not mfa.recovery_left(conn, me.user_id) else None
+    return {"ok": True, "recovery_codes": codes}
+
+
+@common.get("/auth/mfa")
+def mfa_overview(me: Principal = Depends(principal_enrolling), session=Depends(require_session), conn=Depends(db)):
+    from jarvis.security import mfa
+    return {**_mfa_state(conn, session), "policy": mfa.policy(), "methods": mfa.methods(conn, me.user_id),
+            "recovery_codes_left": mfa.recovery_left(conn, me.user_id)}
+
+
+@common.post("/auth/mfa/totp/begin")
+def mfa_totp_begin(body: MfaLabelIn, me: Principal = Depends(principal_enrolling), conn=Depends(db)):
+    from jarvis.security import mfa
+    with tx(conn):
+        return mfa.totp_begin(conn, me.user_id, me.username, body.label or "Authenticator app")
+
+
+@common.post("/auth/mfa/totp/confirm")
+def mfa_totp_confirm(body: TotpConfirmIn, request: Request, me: Principal = Depends(principal_enrolling), conn=Depends(db)):
+    from jarvis.security import mfa
+    with tx(conn):
+        auth.check_throttle(conn, "mfa", request, me.username)
+    with tx(conn):
+        ok = mfa.totp_confirm(conn, me.user_id, body.id, body.code)
+        if ok:
+            return _after_enroll(conn, me)
+    with tx(conn):
+        auth.record_attempt(conn, "mfa", request, ok=False, username=me.username)
+    raise HTTPException(400, "That code didn't match. Check the time on your phone and try the newest code.")
+
+
+@common.post("/auth/mfa/webauthn/begin")
+def mfa_webauthn_begin(body: MfaLabelIn, request: Request, me: Principal = Depends(principal_enrolling), conn=Depends(db)):
+    from jarvis.security import mfa
+    with tx(conn):
+        return mfa.webauthn_register_begin(conn, request, me.user_id, me.username, me.display_name, body.label or "Passkey")
+
+
+@common.post("/auth/mfa/webauthn/finish")
+def mfa_webauthn_finish(body: WebauthnFinishIn, request: Request, me: Principal = Depends(principal_enrolling),
+                        conn=Depends(db)):
+    from jarvis.security import mfa
+    with tx(conn):
+        mfa.webauthn_register_finish(conn, request, me.user_id, body.challenge_id, body.credential)
+        return _after_enroll(conn, me)
+
+
+@common.post("/auth/mfa/recovery-codes")
+def mfa_recovery_codes(me: Principal = Depends(principal), conn=Depends(db)):
+    """New set (the old ones stop working). Needs a session that already passed MFA."""
+    from jarvis.security import mfa
+    if not mfa.enrolled(conn, me.user_id):
+        raise HTTPException(400, "Add an authenticator app or passkey first.")
+    with tx(conn):
+        return {"recovery_codes": mfa.new_recovery_codes(conn, me.user_id)}
+
+
+@common.delete("/auth/mfa/{mid}")
+def mfa_remove(mid: str, me: Principal = Depends(principal), conn=Depends(db)):
+    from jarvis.security import mfa
+    with tx(conn):
+        mfa.remove_method(conn, me.user_id, me.role, mid)
+    return {"ok": True}
 
 
 @router.post("/auth/pairing-code")

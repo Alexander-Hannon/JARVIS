@@ -53,6 +53,13 @@ def world(client, fakes, conn, tmp_path, monkeypatch):
     ids["notification"] = notify(conn, OWNER, "mission", f"{MARK} notification", f"{MARK} body", push=False)
     conn.execute("COMMIT")
     ids["voice"] = a.post("/api/voice/sessions", {"mode": "push_to_talk"}).json()["id"]
+    import time
+
+    from jarvis.security.mfa import totp_at
+    t = a.post("/api/auth/mfa/totp/begin", {"label": f"{MARK} phone"}).json()
+    assert a.post("/api/auth/mfa/totp/confirm", {"id": t["id"], "code": totp_at(t["secret"], int(time.time() // 30))}
+                  ).status_code == 200
+    ids["mfa"] = t["id"]
     ids["project"] = conn.execute("SELECT id FROM projects WHERE user_id=? LIMIT 1", (OWNER,)).fetchone()[0]
     ids["schedule"] = conn.execute("SELECT id FROM schedules WHERE user_id=? LIMIT 1", (OWNER,)).fetchone()[0]
     ids["session"] = conn.execute("SELECT id FROM sessions WHERE user_id=? AND revoked_at IS NULL", (OWNER,)).fetchone()[0]
@@ -98,6 +105,8 @@ def _id_for(path: str, ids: dict) -> str:
         return ids["schedule"]
     if path.startswith("/api/auth/sessions/"):
         return ids["session"]
+    if path.startswith("/api/auth/mfa/"):
+        return ids["mfa"]
     table = {"/api/integrations/{account_id}": "account", "/api/actions/": "action", "/api/captures/": "capture",
              "/api/documents/": "doc", "/api/notifications/": "notification", "/api/localops/roots/": "root",
              "/api/vault/roots/": "root", "/api/policies/": "rule", "/api/runs/": "run", "/api/sandbox/shots/": "shot",

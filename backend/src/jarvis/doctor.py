@@ -37,6 +37,14 @@ def _security_checks(conn: sqlite3.Connection, s, owner: bool) -> list[dict]:
 
     from jarvis.core.util import iso, utcnow
     # ISO strings compare correctly only against ISO strings (not SQLite's datetime() format).
+    from jarvis.security import mfa
+    pol = mfa.policy()
+    owing = [u["username"] for u in rows(conn, "SELECT id, username, role FROM users WHERE status='active'")
+             if mfa.required(u["role"]) and not mfa.enrolled(conn, u["id"])]
+    out.append(_c("Second factor (MFA)", "fail" if pol == "off" else ("warn" if owing else "ok"),
+                  f"policy {pol}" + (f"; not enrolled yet: {', '.join(owing[:5])}" if owing else ""),
+                  "Set JARVIS_MFA_POLICY to privileged or all." if pol == "off" else
+                  ("They'll be asked to enroll at their next sign-in." if owing else None)))
     fails = conn.execute("SELECT COUNT(*) FROM auth_attempts WHERE ok=0 AND at>=?",
                          (iso(utcnow() - timedelta(days=1)),)).fetchone()[0]
     out.append(_c("Failed sign-ins (24 h)", "ok" if fails < 20 else "warn", f"{fails} failed login/pairing/setup attempts",

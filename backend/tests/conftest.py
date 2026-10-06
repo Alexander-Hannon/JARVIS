@@ -23,6 +23,8 @@ LOOPBACK = ("127.0.0.1", 50000)   # a direct local client (TestClient's default 
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("JARVIS_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("JARVIS_ALLOWED_HOSTS", json.dumps(["127.0.0.1", "localhost", "testserver"]))
+    # Most tests exercise features, not the second factor; test_v5_mfa.py turns the real policy on.
+    monkeypatch.setenv("JARVIS_MFA_POLICY", "off")
     monkeypatch.delenv("JARVIS_ANTHROPIC_API_KEY", raising=False)
     # share downloaded STT weights across tests instead of re-downloading into each tmp dir
     from pathlib import Path

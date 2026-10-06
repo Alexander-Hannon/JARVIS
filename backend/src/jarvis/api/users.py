@@ -146,3 +146,19 @@ def reinvite(uid: str, request: Request, me: Principal = Depends(require("users.
         token = auth.create_invite(conn, uid, me.user_id)
         audit(conn, "user", "user.reinvited", f"New invite link for {u['username']}", "user", uid, uid=me.user_id)
     return {"invite_url": _invite_url(request, token), "invite_expires_hours": int(auth.INVITE_TTL.total_seconds() // 3600)}
+
+
+@router.post("/users/{uid}/reset-mfa")
+def reset_mfa(uid: str, me: Principal = Depends(require("users.manage")), conn=Depends(db)):
+    """Lost phone: wipe someone's second factors; their sessions end and they enroll again at next sign-in."""
+    from jarvis.security import mfa
+    with tx(conn):
+        u = row(conn, "SELECT * FROM users WHERE id=?", (uid,))
+        if not u:
+            raise HTTPException(404, "Not found.")
+        if uid == me.user_id:
+            raise HTTPException(400, "Manage your own second factors in Settings → Account.")
+        if u["role"] in OWNER_ONLY_ROLES and not me.can("users.owner"):
+            raise HTTPException(403, "Only an owner can reset an owner's or admin's second factors.")
+        mfa.reset_user(conn, uid, me.user_id)
+    return _view(conn, row(conn, "SELECT * FROM users WHERE id=?", (uid,)))
