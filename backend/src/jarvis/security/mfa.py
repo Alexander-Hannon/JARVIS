@@ -182,8 +182,8 @@ def webauthn_register_begin(conn, request: Request, uid: str, username: str, dis
 
 
 def _take_challenge(conn, cid: str, purpose: str, uid: str | None = None) -> dict:
-    c = row(conn, "SELECT * FROM mfa_challenges WHERE id=? AND purpose=? AND used_at IS NULL"
-            + (" AND user_id=?" if uid else ""), (cid, purpose, *([uid] if uid else [])))
+    c = row(conn, "SELECT * FROM mfa_challenges WHERE id=? AND purpose=? AND used_at IS NULL "
+                  "AND (? IS NULL OR user_id=?)", (cid, purpose, uid or None, uid or None))
     if not c or parse_iso(c["expires_at"]) < utcnow():
         raise HTTPException(401, "That sign-in step expired; start again.")
     conn.execute("UPDATE mfa_challenges SET used_at=? WHERE id=?", (now_iso(), cid))

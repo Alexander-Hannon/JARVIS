@@ -303,9 +303,9 @@ def check_throttle(conn, kind: str, request: Request, username: str | None = Non
         raise HTTPException(429, "Too many attempts from this device; wait 15 minutes.")
     if kind in ("login", "mfa"):
         uname = (username or "").strip().lower() or None
-        known = conn.execute("SELECT 1 FROM auth_attempts WHERE kind='login' AND ip=? AND ok=1 AND at>=?"
-                             + (" AND username=?" if uname else ""),
-                             (ip, _since(timedelta(days=KNOWN_IP_DAYS)), *([uname] if uname else []))).fetchone()
+        known = conn.execute("SELECT 1 FROM auth_attempts WHERE kind='login' AND ip=? AND ok=1 AND at>=? "
+                             "AND (? IS NULL OR username=?)",
+                             (ip, _since(timedelta(days=KNOWN_IP_DAYS)), uname, uname)).fetchone()
         if uname and not known:
             per_user = conn.execute("SELECT COUNT(*) FROM auth_attempts WHERE kind IN ('login','mfa') AND username=? "
                                     "AND ok=0 AND at>=?", (uname, _since(WINDOW))).fetchone()[0]

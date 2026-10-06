@@ -164,8 +164,7 @@ def delete(conn, uid: str, mid: str) -> None:
 
 def get(conn, uid: str | None, mid: str) -> dict:
     """uid=None only for the worker (it runs the mission as its owner)."""
-    m = row(conn, "SELECT * FROM missions WHERE id=?" + ("" if uid is None else " AND user_id=?"),
-            (mid,) if uid is None else (mid, uid))
+    m = row(conn, "SELECT * FROM missions WHERE id=? AND (? IS NULL OR user_id=?)", (mid, uid, uid))
     if not m:
         raise MissionError("not_found", "Mission not found.")
     return m
