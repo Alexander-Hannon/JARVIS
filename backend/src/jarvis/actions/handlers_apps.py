@@ -13,7 +13,7 @@ def _sim(p) -> bool:
 
 # ------------------------------------------------------------------------------------------------ Notion
 def h_notion_create(conn, a: dict, reconcile_first: bool) -> dict:
-    n = A.app_provider(conn, "notion")
+    n = A.app_provider(conn, a["user_id"], "notion")
     parent, title, text = a["target_resource"], a["args"]["title"], a["args"]["text"]
     existing = n.find_child_page(parent, title)
     if existing:
@@ -32,7 +32,7 @@ def h_notion_create(conn, a: dict, reconcile_first: bool) -> dict:
 
 
 def h_notion_append(conn, a: dict, reconcile_first: bool) -> dict:
-    n = A.app_provider(conn, "notion")
+    n = A.app_provider(conn, a["user_id"], "notion")
     page, text = a["target_resource"], a["args"]["text"]
     if reconcile_first:
         if text.strip()[:80] in n.read_page(page)["text"]:
@@ -47,7 +47,7 @@ def h_notion_append(conn, a: dict, reconcile_first: bool) -> dict:
 
 # ------------------------------------------------------------------------------------------------ Slack
 def h_slack_post(conn, a: dict, reconcile_first: bool) -> dict:
-    s = A.app_provider(conn, "slack")
+    s = A.app_provider(conn, a["user_id"], "slack")
     channel, text = a["args"]["channel"], a["args"]["text"]
     found = s.find_post_by_op(channel, a["op_key"])          # hidden message metadata, never visible text
     if found:
@@ -62,7 +62,7 @@ def h_slack_post(conn, a: dict, reconcile_first: bool) -> dict:
 
 # ------------------------------------------------------------------------------------------------ Spotify
 def h_music(conn, a: dict, reconcile_first: bool) -> dict:
-    sp = A.app_provider(conn, "spotify")
+    sp = A.app_provider(conn, a["user_id"], "spotify")
     op = a["action_type"].split(".", 1)[1]
     uri = a["args"].get("uri")
     try:
@@ -92,7 +92,7 @@ def h_music(conn, a: dict, reconcile_first: bool) -> dict:
 # ------------------------------------------------------------------------------------------------ Home Assistant
 def h_home(conn, a: dict, reconcile_first: bool) -> dict:
     from jarvis.integrations.homeassistant import EXPECT, SERVICES, domain_of, is_secure
-    ha = A.app_provider(conn, "homeassistant")
+    ha = A.app_provider(conn, a["user_id"], "homeassistant")
     entity, service = a["target_resource"], a["args"]["service"]
     domain = domain_of(entity)
     # Re-derive the tier from the entity in code: a proposal can't launder a lock through home.control.

@@ -6,6 +6,7 @@
 - Misfires (host asleep/offline): only the most recent missed occurrence is considered. Within its
   grace window it runs once as a labeled catch-up; older/expired ones are marked missed with at most
   ONE summary notification — never a burst.
+- Schedules belong to one user; their briefings, notifications and dedupe keys are that user's.
 """
 from __future__ import annotations
 
@@ -56,9 +57,15 @@ def refresh_next(conn, sched_id: str, after: datetime | None = None) -> None:
     conn.execute("UPDATE schedules SET next_run_at=?, updated_at=? WHERE id=?", (iso(nxt) if nxt else None, now_iso(), sched_id))
 
 
-def update_schedule(conn, sched_id: str, patch: dict) -> dict:
+def _dedupe(s: dict, d: date) -> str:
+    # The first owner keeps the V4 key format so an occurrence that already ran before the upgrade can't run twice.
+    base = f"{s['key']}:{d.isoformat()}"
+    return base if s["user_id"] == "usr_owner" else f"{s['user_id']}:{base}"
+
+
+def update_schedule(conn, uid: str, sched_id: str, patch: dict) -> dict:
     with tx(conn):
-        s = row(conn, "SELECT * FROM schedules WHERE id=?", (sched_id,))
+        s = row(conn, "SELECT * FROM schedules WHERE id=? AND user_id=?", (sched_id, uid))
         if not s:
             raise KeyError(sched_id)
         fields = {k: patch[k] for k in ("enabled", "hour", "minute", "destination") if k in patch}
@@ -72,12 +79,12 @@ def update_schedule(conn, sched_id: str, patch: dict) -> dict:
                          (*fields.values(), now_iso(), sched_id))
         # Activation starts from NOW: enabling never back-fills past occurrences.
         refresh_next(conn, sched_id)
-        audit(conn, "user", "schedule.updated", f"{s['label']}: {fields}", "schedule", sched_id)
-    return view(conn, sched_id)
+        audit(conn, "user", "schedule.updated", f"{s['label']}: {fields}", "schedule", sched_id, uid=uid)
+    return view(conn, uid, sched_id)
 
 
-def view(conn, sched_id: str) -> dict:
-    s = row(conn, "SELECT * FROM schedules WHERE id=?", (sched_id,))
+def view(conn, uid: str, sched_id: str) -> dict:
+    s = row(conn, "SELECT * FROM schedules WHERE id=? AND user_id=?", (sched_id, uid))
     s["weekdays"] = jload(s["weekdays"])
     s["enabled"] = bool(s["enabled"])
     return s
@@ -107,8 +114,9 @@ def tick(conn: sqlite3.Connection, now: datetime | None = None) -> list[dict]:
                     run_id = _record_run(conn, s, inst, d, "queued", catch_up=late > timedelta(minutes=5))
                     if run_id:
                         jid = jobs.enqueue(conn, "run_briefing", {"schedule_run_id": run_id, "workflow": s["workflow"],
+                                                                  "user_id": s["user_id"],
                                                                   "catch_up": late > timedelta(minutes=5)},
-                                           dedupe_key=f"brief:{s['key']}:{d.isoformat()}")
+                                           dedupe_key=f"brief:{_dedupe(s, d)}")
                         conn.execute("UPDATE schedule_runs SET job_id=? WHERE id=?", (jid, run_id))
                         actions.append({"schedule": s["key"], "date": d.isoformat(), "action": "queued",
                                         "catch_up": late > timedelta(minutes=5)})
@@ -116,7 +124,7 @@ def tick(conn: sqlite3.Connection, now: datetime | None = None) -> list[dict]:
                     if _record_run(conn, s, inst, d, "missed", catch_up=False):
                         actions.append({"schedule": s["key"], "date": d.isoformat(), "action": "missed"})
                         n_missed = len(occ)
-                        notify(conn, "schedule_missed", f"Missed {s['label']}" + (f" (+{n_missed - 1} earlier)" if n_missed > 1 else ""),
+                        notify(conn, s["user_id"], "schedule_missed", f"Missed {s['label']}" + (f" (+{n_missed - 1} earlier)" if n_missed > 1 else ""),
                                "The host was asleep or offline. Generate it now from Briefings if still useful.",
                                "schedule", s["id"], push=False)
             nxt = next_run(s, now)
@@ -130,7 +138,7 @@ def _record_run(conn, s: dict, inst: datetime, d: date, status: str, catch_up: b
     cur = conn.execute("INSERT OR IGNORE INTO schedule_runs (id, schedule_id, scheduled_for, local_wall, dedupe_key, status, "
                        "catch_up, created_at) VALUES (?,?,?,?,?,?,?,?)",
                        (rid, s["id"], iso(inst), f"{d.isoformat()}T{s['hour']:02d}:{s['minute']:02d} {s['tz']}",
-                        f"{s['key']}:{d.isoformat()}", status, int(catch_up), now_iso()))
+                        _dedupe(s, d), status, int(catch_up), now_iso()))
     return rid if cur.rowcount else None
 
 

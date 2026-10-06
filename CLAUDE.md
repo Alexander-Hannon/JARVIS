@@ -42,9 +42,9 @@ V4 plan (approved by AJ): `~/.claude/plans/alright-so-let-s-go-polymorphic-wilke
   (unprivileged, cap-drop ALL, read-only rootfs, no host mounts, `--internal` network). Its only exit is the
   `jarvis-egress` allowlist proxy, opened by an approved `sandbox.network` window (T2, domains + expiry). Files leave
   only via a `file.write` proposal. The computer toolset drives the sandbox display, never the host desktop.
-- Skills are installed only by AJ (local folder) or from a draft he approved (`skill.install`, T2). No public registry.
+- Skills are installed only by an owner/admin (local folder) or from a draft its requester approved (`skill.install`, T2; enterprise also needs an admin co-approval). No public registry.
 - Missions run with `agent.Scope` (allowed families, proposals on/off, origin `mission`, per-run/monthly caps);
-  Telegram commands run with origin `channel`, one paired chat, forwards stored as untrusted notes.
+  Telegram commands run with origin `channel`, one paired chat per person (`channel_links`), forwards stored as untrusted notes.
 - Host shell, SSH, VM admin, purchases, grades, payments: NOT enabled.
 - Retrieved/uploaded/calendar/document text is untrusted data. It never grants permissions, picks destinations, or approves.
 - Timeouts after writes are `unknown` outcomes: reconcile (marker / deterministic ID) before any retry. Never duplicate.
@@ -55,6 +55,22 @@ V4 plan (approved by AJ): `~/.claude/plans/alright-so-let-s-go-polymorphic-wilke
   `JARVIS_TRUSTED_PROXIES`. Sessions have idle + absolute limits. CSP stays `script-src 'self'` (no inline/third-party script).
 - User-supplied URLs (ICS, Canvas, SimpleFIN, …) go through `netguard` with `PinnedTransport` (DNS checked once, connect to
   that IP). Short secrets in TEXT columns use `secrets.seal/unseal`.
+- V5 multi-user (plan `~/.claude/plans/floating-gathering-liskov.md`): one org per DB. Every request resolves to a
+  `Principal` (`security/principal.py`, role → `PERMS`); services take `uid` explicitly and every per-user query filters
+  `user_id=?` — no globals, no "current owner" fallback. Private by default: admins manage people and org config and see
+  audit *metadata*; never another person's conversations, memories, documents, proposals, rules, integrations or sandbox.
+  Foreign or unknown ids answer **404** (never 403). DB triggers refuse a NULL `user_id` on per-user tables; a new
+  per-user table needs `user_id`, a trigger, and a row in `tests/test_v5_isolation.py`. A new route needs a role
+  dependency (`require(perm)`) and an entry in the isolation sweep if it takes an id.
+- Approvals bind to a person: the executor voids an approval not given by the proposal's owner, writes only through
+  accounts that owner holds, and policy rules cover only their author's proposals. Org-level accounts
+  (Anthropic, Telegram bot) have `user_id` NULL and are set up only with `org.integrations`. `co_approver_perm` types
+  (`skill.install`) also need a second, different person with that permission (enterprise edition).
+- MFA: `JARVIS_MFA_POLICY` (auto = all in remote mode, privileged otherwise). A session that owes a second factor reaches
+  only `/api/auth/me`, `/api/auth/mfa*`, logout. Only owners grant/remove owner/admin; the last owner can't be demoted or
+  disabled. Admin user management never exposes content. `JARVIS_EDITION=enterprise` hides personal-only connectors.
+- Per-user sandbox: `names_for(uid)` gives each person their own container/volume/network/proxy (owner keeps the legacy
+  `jarvis-sbx` names); one person's network window never opens another's.
 - Until V5 M2 lands classification routing and a CUI-authorized model path, do not load CUI into any install.
 - Bandit findings that are reviewed false positives get an inline `# nosec <id> <reason>`; never disable a check globally.
 - Default network binding is loopback. Do not deploy publicly, open ports, or spend on runtime API calls without AJ's explicit approval.

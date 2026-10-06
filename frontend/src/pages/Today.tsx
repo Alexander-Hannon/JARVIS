@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
+import { useAuth } from '../state/auth';
 import { HeadsUp, WeeklyReport } from '../components/HeadsUp';
 import type { Plan, Task, Today } from '../api/types';
 import { Async, Card, Empty, ErrorBox, SourceBadge } from '../components/ui';
@@ -292,13 +293,17 @@ function TodayWeather() {
 }
 
 
-function greeting(d: Date): string {
+function greeting(d: Date, name: string): string {
   const h = d.getHours();
-  return h < 5 ? 'Working late, AJ' : h < 12 ? 'Good morning, AJ' : h < 17 ? 'Good afternoon, AJ' : 'Good evening, AJ';
+  const hi = h < 5 ? 'Working late' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+  return name ? `${hi}, ${name}` : hi;
 }
 
 /** Greeting + the next real event on the calendar with a live countdown. */
 function TodayHero({ t }: { t: Today }) {
+  const { me } = useAuth();
+  // The server's greeting name (how JARVIS addresses you) wins; the mocked/legacy UI falls back to AJ.
+  const firstName = (t.greeting_name ?? me?.display_name ?? 'AJ').split(' ')[0];
   const [now, setNow] = useState(() => new Date());
   useInterval(() => setNow(new Date()), 30000);
   const evs = (t.calendar_visual?.days?.[0]?.events ?? []).filter((e) => !e.all_day && e.start && e.end);
@@ -311,7 +316,7 @@ function TodayHero({ t }: { t: Today }) {
   return (
     <header className="today-hero">
       <div>
-        <h1 className="hero-greet">{greeting(now)}.</h1>
+        <h1 className="hero-greet">{greeting(now, firstName)}.</h1>
         <p className="hero-date">
           {fmtDate(t.date)}
           {t.tz !== localTz() && <span className="warn-text"> (this device is in {localTz()})</span>}

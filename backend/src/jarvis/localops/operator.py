@@ -10,8 +10,8 @@ from jarvis.core.util import run_event
 from jarvis.localops import files as F
 
 
-def _pick_root(conn, text: str) -> dict | None:
-    roots = F.list_roots(conn)
+def _pick_root(conn, uid: str, text: str) -> dict | None:
+    roots = F.list_roots(conn, uid)
     if not roots:
         return None
     low = text.lower()
@@ -25,9 +25,9 @@ def handle(conn, inp, reply, run_id: str) -> None:
     from jarvis.agents.chief import _new_proposal
     text = inp.text.strip()
     low = text.lower()
-    root = _pick_root(conn, text)
+    root = _pick_root(conn, inp.user_id, text)
     if not root:
-        reply.say("No workspace folders are designated yet. Add one in Settings → Local workspace (read-only or read/write).")
+        reply.say("No workspace folders are assigned to you yet. An admin can add one in Settings → Local workspace.")
         return
     try:
         if re.search(r"\b(list|show)( me)? (the )?files\b", low):
@@ -54,7 +54,7 @@ def handle(conn, inp, reply, run_id: str) -> None:
             return
         m = re.search(r"\b(?:rename|move)(?: the)?(?: file)?\s+[\"“]?(.+?)[\"”]?\s+to\s+[\"“]?(.+?)[\"”]?\s*$", text, re.IGNORECASE)
         if m:
-            plan = F.plan_move(conn, root["id"], m.group(1).strip(), m.group(2).strip())
+            plan = F.plan_move(conn, inp.user_id, root["id"], m.group(1).strip(), m.group(2).strip())
             spec = ActionSpec(action_type="file.move", args=plan["args"], timezone=inp.tz, target_resource=root["id"],
                               target_name=root["label"], before=plan["before"], after=plan["after"],
                               expected_effect=f"Move {root['label']}/{plan['args']['src']} → {plan['args']['dst']}",
@@ -67,7 +67,7 @@ def handle(conn, inp, reply, run_id: str) -> None:
             reply.say(rel)
             return
         overwrite = bool(re.search(r"\boverwrite\b", low))
-        plan = F.plan_write(conn, root["id"], rel, content, allow_overwrite=overwrite)
+        plan = F.plan_write(conn, inp.user_id, root["id"], rel, content, allow_overwrite=overwrite)
         spec = ActionSpec(action_type="file.write", args=plan["args"], timezone=inp.tz, target_resource=root["id"],
                           target_name=root["label"], before=plan["before"], after=plan["after"] | {"diff": plan["diff"]},
                           expected_effect=f"{'Overwrite' if plan['before']['exists'] else 'Create'} {root['label']}/{rel}",
@@ -82,7 +82,7 @@ def handle(conn, inp, reply, run_id: str) -> None:
 def _content_for_write(conn, inp, text: str) -> tuple[str | None, str, str]:
     low = text.lower()
     if re.search(r"\b(briefing|brief)\b", low):
-        b = row(conn, "SELECT * FROM briefings ORDER BY created_at DESC LIMIT 1")
+        b = row(conn, "SELECT * FROM briefings WHERE user_id=? ORDER BY created_at DESC LIMIT 1", (inp.user_id,))
         if not b:
             return None, "No briefing exists yet — ask me to brief you first.", ""
         from jarvis.briefings.workflows import _view, render_text
@@ -91,10 +91,12 @@ def _content_for_write(conn, inp, text: str) -> tuple[str | None, str, str]:
                 f"Jarvis Exports/{b['kind']}-{b['for_date']}.md", "Export briefing")
     if re.search(r"\bmemor(y|ies)\b", low):
         from jarvis.memory.service import export_markdown
-        return export_markdown(conn), "Jarvis Exports/memory-export.md", "Export memories"
+        return export_markdown(conn, inp.user_id), "Jarvis Exports/memory-export.md", "Export memories"
     if re.search(r"\baction list\b|\bactions\b", low):
         acts = rows(conn, "SELECT a.expected_effect, a.state, a.external_url FROM proposed_actions a "
-                          "WHERE a.state NOT IN ('superseded','skipped') ORDER BY a.updated_at DESC LIMIT 50")
+                          "JOIN proposal_versions pv ON pv.id=a.proposal_version_id JOIN proposals p ON p.id=pv.proposal_id "
+                          "WHERE p.user_id=? AND a.state NOT IN ('superseded','skipped') ORDER BY a.updated_at DESC LIMIT 50",
+                    (inp.user_id,))
         md = "# Jarvis action list\n\n" + "\n".join(f"- [{'x' if a['state'] == 'verified' else ' '}] {a['expected_effect']} "
                                                     f"({a['state']})" for a in acts) + "\n"
         return md, "Jarvis Exports/action-list.md", "Export action list"

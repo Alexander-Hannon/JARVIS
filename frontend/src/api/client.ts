@@ -14,6 +14,11 @@ export function hasCsrfToken(): boolean {
 export function onUnauthorized(fn: (() => void) | null): void {
   unauthorizedHandler = fn;
 }
+let mfaHandler: (() => void) | null = null;
+/** Called when the server says this session still owes a second factor (enroll, or sign in again). */
+export function onMfaNeeded(fn: (() => void) | null): void {
+  mfaHandler = fn;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -94,7 +99,9 @@ export async function request<R>(path: string, opts: RequestOpts = {}): Promise<
   }
   if (!res.ok) {
     if (res.status === 401 && !opts.noAuthRedirect && unauthorizedHandler) unauthorizedHandler();
-    throw normalizeError(res.status, parsed, `${res.status} ${res.statusText || 'Request failed'}`);
+    const err = normalizeError(res.status, parsed, `${res.status} ${res.statusText || 'Request failed'}`);
+    if (res.status === 403 && err.code?.startsWith('mfa_') && mfaHandler) mfaHandler();
+    throw err;
   }
   return parsed as R;
 }
@@ -120,9 +127,41 @@ const q = (params: Record<string, string | number | undefined | null>): string =
 export const api = {
   // Auth
   authStatus: () => request<T.AuthStatus>('/api/auth/status', { noAuthRedirect: true }),
-  setup: (password: string, setup_token?: string) =>
-    request<T.CsrfResponse>('/api/auth/setup', { json: { password, setup_token: setup_token || undefined }, noAuthRedirect: true }),
-  login: (password: string) => request<T.CsrfResponse>('/api/auth/login', { json: { password }, noAuthRedirect: true }),
+  setup: (username: string, password: string, display_name: string, setup_token?: string) =>
+    request<T.CsrfResponse>('/api/auth/setup', {
+      json: { username, password, display_name: display_name || undefined, setup_token: setup_token || undefined }, noAuthRedirect: true,
+    }),
+  login: (username: string, password: string) =>
+    request<T.LoginResult>('/api/auth/login', { json: { username, password }, noAuthRedirect: true }),
+  mfaVerify: (challenge_id: string, method: string, code?: string, credential?: unknown) =>
+    request<T.CsrfResponse>('/api/auth/mfa/verify', { json: { challenge_id, method, code, credential }, noAuthRedirect: true }),
+  inviteInfo: (token: string) => request<T.InviteInfo>(`/api/auth/invite/${encodeURIComponent(token)}`, { noAuthRedirect: true }),
+  acceptInvite: (token: string, password: string) =>
+    request<T.CsrfResponse>('/api/auth/invite/accept', { json: { token, password }, noAuthRedirect: true }),
+  me: () => request<T.Me>('/api/auth/me'),
+  changePassword: (current_password: string, new_password: string) =>
+    request<{ ok: boolean; signed_out: number }>('/api/auth/password', { json: { current_password, new_password } }),
+  mfa: () => request<T.MfaOverview>('/api/auth/mfa'),
+  totpBegin: (label: string) => request<T.TotpBegin>('/api/auth/mfa/totp/begin', { json: { label } }),
+  totpConfirm: (id: string, code: string) => request<T.EnrollResult>('/api/auth/mfa/totp/confirm', { json: { id, code } }),
+  passkeyBegin: (label: string) =>
+    request<{ challenge_id: string; options: Record<string, unknown> }>('/api/auth/mfa/webauthn/begin', { json: { label } }),
+  passkeyFinish: (challenge_id: string, credential: unknown) =>
+    request<T.EnrollResult>('/api/auth/mfa/webauthn/finish', { json: { challenge_id, credential } }),
+  newRecoveryCodes: () => request<{ recovery_codes: string[] }>('/api/auth/mfa/recovery-codes', { method: 'POST' }),
+  removeMfa: (id: string) => request<{ ok: boolean }>(`/api/auth/mfa/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  users: () => request<T.AdminUser[]>('/api/users'),
+  inviteUser: (body: { username: string; display_name: string; email?: string; role: T.Role }) =>
+    request<{ user: T.AdminUser } & T.InviteLink>('/api/users', { json: body }),
+  updateUser: (id: string, patch: Partial<Pick<T.AdminUser, 'display_name' | 'role' | 'status'>>) =>
+    request<T.AdminUser>(`/api/users/${encodeURIComponent(id)}`, { method: 'PATCH', json: patch }),
+  reinviteUser: (id: string) => request<T.InviteLink>(`/api/users/${encodeURIComponent(id)}/invite`, { method: 'POST' }),
+  resetUserMfa: (id: string) => request<T.AdminUser>(`/api/users/${encodeURIComponent(id)}/reset-mfa`, { method: 'POST' }),
+  coApprovals: () => request<T.CoApproval[]>('/api/approvals/co'),
+  coApprove: (id: string, version: number, hash: string, decision: 'approve' | 'decline') =>
+    request<{ status: string }>(`/api/approvals/co/${encodeURIComponent(id)}`, { json: { version, hash, decision } }),
+  setDocumentVisibility: (id: string, visibility: 'private' | 'org') =>
+    request<{ visibility: string }>(`/api/documents/${encodeURIComponent(id)}/visibility`, { json: { visibility } }),
   logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
   pairingCode: () => request<T.PairingCode>('/api/auth/pairing-code', { method: 'POST' }),
   sessions: () => request<T.DeviceSession[]>('/api/auth/sessions'),

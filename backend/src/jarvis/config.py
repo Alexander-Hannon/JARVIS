@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     # Reverse proxies (e.g. 127.0.0.1 for `tailscale serve`) whose X-Forwarded-For is believed for client-IP
     # attribution and throttling. A forwarded request is never treated as "loopback" for setup.
     trusted_proxies: list[str] = Field(default_factory=list)
+    # Accounts unused this long are disabled at their next sign-in (3.5.6); 0 turns it off. The owner is exempt.
+    dormant_days: int = 90
+    # Second factor (800-171 3.5.3): auto = everyone in remote mode, privileged roles on a loopback-only install;
+    # privileged | all | off (off is for tests and is flagged by doctor).
+    mfa_policy: str = "auto"
+    # personal = AJ-style single-person install (personal connectors, personal seed); enterprise = company install.
+    edition: str = "personal"
     # Secret key for encrypting stored tokens. If unset, read from <data_dir>/secret.key
     # (created on setup with 0600 perms). Never stored in the database.
     secret_key: str | None = None

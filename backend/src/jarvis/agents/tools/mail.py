@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from jarvis.agents.tools import obj, tool
-from jarvis.core.db import jload, row
 from jarvis.core.util import run_event
 from jarvis.integrations import accounts as A
 from jarvis.integrations.base import ProviderError
@@ -14,7 +13,7 @@ NOT_CONNECTED = {"status": "not_connected", "detail": "No mailbox is connected (
 
 
 def _boxes(run) -> list[str]:
-    return A.connected_mailboxes(run.conn)
+    return A.connected_mailboxes(run.conn, run.uid)
 
 
 def _default_box(run, box: str | None) -> str | dict:
@@ -23,13 +22,14 @@ def _default_box(run, box: str | None) -> str | dict:
         return NOT_CONNECTED
     if box:
         return box if box in boxes else {"status": "not_connected", "detail": f"{box} is not connected."}
-    data = jload((row(run.conn, "SELECT data FROM user_settings WHERE id=1") or {}).get("data"), {}) or {}
+    from jarvis.core import settings as S
+    data = S.user_data(run.conn, run.uid)
     pref = (data.get("mail") or {}).get("default_mailbox")
     return pref if pref in boxes else boxes[0]
 
 
-def send_enabled(conn, box: str) -> bool:
-    acct = A.mail_account(conn, box)
+def send_enabled(conn, uid: str, box: str) -> bool:
+    acct = A.mail_account(conn, uid, box)
     return bool(acct and A.grants(conn, acct["id"], "mail_send", "write"))
 
 
@@ -42,7 +42,7 @@ def check_inbox(run, unread_only: bool = True, limit: int = 15):
     if not _boxes(run):
         return NOT_CONNECTED
     run_event(run.conn, run.run_id, "tool", "Checking your inbox")
-    r = M.inbox(run.conn, unread_only=unread_only, limit=limit)
+    r = M.inbox(run.conn, run.uid, unread_only=unread_only, limit=limit)
     from jarvis.agents import visuals as V
     if r["items"]:
         run.visuals["inbox"] = V.inbox(r["items"], r["counts"])
@@ -59,7 +59,7 @@ def search_email(run, query: str, limit: int = 10):
     if not _boxes(run):
         return NOT_CONNECTED
     run_event(run.conn, run.run_id, "tool", f"Searching your email: {query}")
-    r = M.inbox(run.conn, unread_only=False, limit=limit, query=query)
+    r = M.inbox(run.conn, run.uid, unread_only=False, limit=limit, query=query)
     return {"sources": r["sources"],
             "messages": [{k: m[k] for k in ("ref", "mailbox", "from_name", "sender_email", "subject", "snippet", "date")}
                          for m in r["items"]],
@@ -74,7 +74,7 @@ def read_email(run, ref: str):
         return NOT_CONNECTED
     run_event(run.conn, run.run_id, "tool", "Reading the email thread")
     try:
-        return M.read_thread(run.conn, ref)
+        return M.read_thread(run.conn, run.uid, ref)
     except M.MailError as e:
         return {"error": e.message}
 
@@ -97,10 +97,10 @@ def propose_email_draft(run, body: str, to: list[str] | None = None, cc: list[st
     participants: set[str] = set()
     if reply_to_ref:
         try:
-            box, mid = M.parse_ref(run.conn, reply_to_ref)
+            box, mid = M.parse_ref(run.conn, run.uid, reply_to_ref)
         except M.MailError as e:
             return {"error": e.message}
-        mp = A.mail_provider(run.conn, box)
+        mp = A.mail_provider(run.conn, run.uid, box)
         reply = mp.get_message(mid)
         if reply is None:
             return {"error": "That email no longer exists."}
@@ -119,7 +119,7 @@ def propose_email_draft(run, body: str, to: list[str] | None = None, cc: list[st
     bad = M.recipients_allowed(run.inp.text, to + (cc or []), participants)
     if bad:
         return {"error": f"Recipient(s) {bad} weren't named by AJ and aren't on the thread. Ask AJ to confirm the address."}
-    acct = A.mail_account(run.conn, box)
+    acct = A.mail_account(run.conn, run.uid, box)
     subject = (subject or "").strip() or "(no subject)"
     args = {"to": to, "cc": cc or [], "subject": subject, "body": body.strip(),
             "reply_to_message_id": reply.id if reply else None}
@@ -144,16 +144,16 @@ def propose_send_draft(run, draft_id: str, mailbox: str):
     from jarvis.actions.proposals import ActionSpec
     if mailbox not in _boxes(run):
         return {"status": "not_connected", "detail": f"{mailbox} is not connected."}
-    if not send_enabled(run.conn, mailbox):
+    if not send_enabled(run.conn, run.uid, mailbox):
         return {"error": "Sending is turned off for this mailbox (Settings → Integrations → Email). The draft is saved; "
                          "AJ can send it himself or enable sending."}
     try:
-        d = A.mail_provider(run.conn, mailbox).get_draft(draft_id)
+        d = A.mail_provider(run.conn, run.uid, mailbox).get_draft(draft_id)
     except ProviderError as e:
         return {"error": f"{e.kind}: {e.message}"}
     if d is None:
         return {"error": "That draft no longer exists."}
-    acct = A.mail_account(run.conn, mailbox)
+    acct = A.mail_account(run.conn, run.uid, mailbox)
     label = "Gmail" if mailbox == "gmail" else "Outlook"
     run.specs.append(ActionSpec(action_type=f"{mailbox}.send", args={"draft_id": draft_id, "to": d.to}, timezone=run.tz,
                                 account_id=acct["id"] if acct else None,

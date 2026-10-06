@@ -54,6 +54,7 @@ def _load(conn, action_id: str) -> tuple[dict, dict, dict]:
     a["args"].pop("_target_name", None)
     a["preconditions"] = jload(a["preconditions"], {})
     a["before_state"] = jload(a["before_state"])
+    a["user_id"] = p["user_id"]          # handlers act for the proposal's owner, with that owner's accounts only
     return a, pv, p
 
 
@@ -69,20 +70,40 @@ def _guard(conn, a: dict, pv: dict, p: dict, approval_id: str) -> None:
         raise Blocked("superseded", "Plan was revised after approval; the old version will not run.")
     if parse_iso(appr["created_at"]) + P.EXECUTION_WINDOW < utcnow():
         raise Blocked("cancelled", "Approval is older than the execution window; re-propose to run it.")
+    if appr["approved_by"] != p["user_id"]:
+        # Private by default: only the proposal's owner can approve it (or their own rule, channel 'policy').
+        raise Blocked("cancelled", "Approval wasn't given by the plan's owner; approval is void.")
+    at0 = R.get(a["action_type"])
+    if at0 is not None and P.co_perms_needed([at0.name]):
+        _check_co_approval(conn, pv, p, at0.co_approver_perm)
     at = R.get(a["action_type"])
     if at is None or R.provider_for(at.name) != a["provider"]:
         raise Blocked("failed", f"Action type {a['action_type']} is not enabled.")
     if at.account_provider is None:
         return  # local operator checks its own root grants
-    acct = A.get_account(conn, at.account_provider)
-    override = a["provider"] in A._overrides   # labeled contract fake installed (tests / simulated mode)
+    acct = A.get_account(conn, p["user_id"], at.account_provider)
+    override = A._override(p["user_id"], a["provider"]) is not None   # labeled contract fake (tests / simulated mode)
     if (acct is None and not override) or (acct is not None and acct["id"] != a["account_id"]):
         raise Blocked("failed", "The target account changed or was disconnected since approval; approval is void.")
+    if a["account_id"]:
+        owner = row(conn, "SELECT user_id FROM integration_accounts WHERE id=?", (a["account_id"],))
+        if not owner or owner["user_id"] != p["user_id"]:
+            raise Blocked("failed", "That account doesn't belong to the plan's owner; nothing was written.")
     if acct is not None and acct["status"] not in ("connected", "error"):
         raise Blocked("failed", f"{at.account_provider} is {acct['status']}; reconnect it.")
     if a["account_id"] and at.grant_type and (at.grant_always or a["target_resource"]):
         if not A.has_grant(conn, a["account_id"], at.grant_type, a["target_resource"] or "", "write"):
             raise Blocked("failed", f"No write permission recorded for {at.grant_type} '{a['target_resource']}'.")
+
+
+def _check_co_approval(conn, pv: dict, p: dict, perm: str) -> None:
+    """Org-impacting types: a different, active person who *still* holds `perm` co-approved this exact version."""
+    from jarvis.security.principal import PERMS
+    co = row(conn, "SELECT a.approved_by, u.role, u.status FROM approvals a JOIN users u ON u.id=a.approved_by "
+                   "WHERE a.proposal_version_id=? AND a.proposal_hash=? AND a.kind='co' AND a.revoked_at IS NULL",
+             (pv["id"], pv["hash"]))
+    if not co or co["approved_by"] == p["user_id"] or co["status"] != "active" or co["role"] not in PERMS[perm]:
+        raise Blocked("cancelled", "This change affects the whole organization and needs a co-approver's sign-off.")
 
 
 def _set_state(conn, a_id: str, state: str, **fields) -> None:
@@ -112,14 +133,14 @@ def execute(conn: sqlite3.Connection, action_id: str, approval_id: str, job_id: 
             return {"state": a["state"], "noop": True}
         if P.control_paused(conn):
             _set_state(conn, a["id"], "paused")
-            audit(conn, "worker", "action.paused", "Action held: actions are paused", "action", a["id"])
+            audit(conn, "worker", "action.paused", "Action held: actions are paused", "action", a["id"], uid=p["user_id"])
             P.recompute_status(conn, p["id"])
             return {"state": "paused"}
         try:
             _guard(conn, a, pv, p, approval_id)
         except Blocked as b:
             _set_state(conn, a["id"], b.state, last_error=b.message)
-            audit(conn, "worker", "action.blocked", b.message, "action", a["id"])
+            audit(conn, "worker", "action.blocked", b.message, "action", a["id"], uid=p["user_id"])
             run_event(conn, p["run_id"], "error", f"Not executed: {b.message}")
             P.recompute_status(conn, p["id"])
             return {"state": b.state, "error": b.message}
@@ -143,7 +164,7 @@ def execute(conn: sqlite3.Connection, action_id: str, approval_id: str, job_id: 
             _finish_attempt(conn, attempt_id, "precondition_failed" if b.state == "conflict" else "blocked", error=b.message)
             _set_state(conn, a["id"], b.state, last_error=b.message)
             run_event(conn, p["run_id"], "error", f"Stopped before writing: {b.message}")
-            audit(conn, "worker", "action.precondition_failed", b.message, "action", a["id"])
+            audit(conn, "worker", "action.precondition_failed", b.message, "action", a["id"], uid=p["user_id"])
             P.recompute_status(conn, p["id"])
         return {"state": b.state, "error": b.message}
     except A.NotConnected as e:
@@ -168,7 +189,8 @@ def execute(conn: sqlite3.Connection, action_id: str, approval_id: str, job_id: 
                     if acct_id:
                         A.set_status(conn, acct_id, "error", "Authorization expired or revoked; reconnect required.")
                 state = retry_state
-            audit(conn, "worker", "action.error", f"{a['action_type']} {e.kind}: {e.message}", "action", a["id"])
+            audit(conn, "worker", "action.error", f"{a['action_type']} {e.kind}: {e.message}", "action", a["id"],
+                  uid=p["user_id"])
             P.recompute_status(conn, p["id"])
         return {"state": state, "error": e.message, "retryable": (not e.outcome_known) or e.retryable,
                 "retry_after": e.retry_after}
@@ -187,11 +209,12 @@ def execute(conn: sqlite3.Connection, action_id: str, approval_id: str, job_id: 
         run_event(conn, p["run_id"], "verify", ("Verified: " if result["ok"] else "Verification mismatch: ") + msg,
                   {"simulated": result.get("simulated", False)})
         audit(conn, "worker", "action.verified" if result["ok"] else "action.verify_mismatch", msg, "action", a["id"],
-              {"method": result["method"], "simulated": result.get("simulated", False)})
+              {"method": result["method"], "simulated": result.get("simulated", False)}, uid=p["user_id"])
         status = P.recompute_status(conn, p["id"])
         if status in ("verified", "partial", "failed", "unknown"):
             from jarvis.briefings.notify import notify
-            notify(conn, "action_result", f"{p['title']}: {status}", _status_line(conn, pv["id"]), "proposal", p["id"])
+            notify(conn, p["user_id"], "action_result", f"{p['title']}: {status}", _status_line(conn, pv["id"]), "proposal",
+                   p["id"])
         record_latency(conn, "execution", (utcnow() - t0).total_seconds() * 1000, {"action_type": a["action_type"]})
     return {"state": state}
 
@@ -225,19 +248,20 @@ def _link_task(status: str):
         args = a["args"]
         conn.execute(
             "INSERT INTO task_links (id, op_key, action_id, account_id, external_id, url, content, project_ext_id, due, status, "
-            "last_synced_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "last_synced_at, created_at, updated_at, user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(op_key) DO UPDATE SET external_id=excluded.external_id, url=excluded.url, status=excluded.status, "
             "last_synced_at=excluded.last_synced_at, updated_at=excluded.updated_at",
             (new_id("tl"), a["op_key"], a["id"], a["account_id"], a.get("_ext_id"), a.get("_url"), args.get("content", ""),
              args.get("project_id"), jdump({k: args.get(k) for k in ("due_date", "due_datetime", "due_string")}), status,
-             now_iso(), now_iso(), now_iso()))
+             now_iso(), now_iso(), now_iso(), a["user_id"]))
         if a["action_type"] != "task.create" and args.get("task_id"):
-            conn.execute("UPDATE task_links SET status=?, updated_at=? WHERE external_id=?", (status, now_iso(), args["task_id"]))
+            conn.execute("UPDATE task_links SET status=?, updated_at=? WHERE external_id=? AND user_id=?",
+                         (status, now_iso(), args["task_id"], a["user_id"]))
     return link
 
 
 def h_task_create(conn, a: dict, reconcile_first: bool) -> dict:
-    tp = A.task_provider(conn)
+    tp = A.task_provider(conn, a["user_id"])
     args = dict(a["args"])
     mk = marker(a["op_key"])
     sim = A.is_simulated(tp)
@@ -272,7 +296,7 @@ def _remote_snapshot_check(t, before: dict | None) -> None:
 
 
 def h_task_update(conn, a: dict, reconcile_first: bool) -> dict:
-    tp = A.task_provider(conn)
+    tp = A.task_provider(conn, a["user_id"])
     args = dict(a["args"])
     tid = args.pop("task_id")
     current = tp.get_task(tid)
@@ -291,7 +315,7 @@ def h_task_update(conn, a: dict, reconcile_first: bool) -> dict:
 
 
 def h_task_complete(conn, a: dict, reconcile_first: bool) -> dict:
-    tp = A.task_provider(conn)
+    tp = A.task_provider(conn, a["user_id"])
     tid = a["args"]["task_id"]
     current = tp.get_task(tid)
     if current is None:
@@ -308,7 +332,7 @@ def h_task_complete(conn, a: dict, reconcile_first: bool) -> dict:
 
 
 def h_task_reopen(conn, a: dict, reconcile_first: bool) -> dict:
-    tp = A.task_provider(conn)
+    tp = A.task_provider(conn, a["user_id"])
     tid = a["args"]["task_id"]
     current = tp.get_task(tid)
     if current is None:
@@ -322,7 +346,7 @@ def h_task_reopen(conn, a: dict, reconcile_first: bool) -> dict:
 
 
 def h_task_delete(conn, a: dict, reconcile_first: bool) -> dict:
-    tp = A.task_provider(conn)
+    tp = A.task_provider(conn, a["user_id"])
     tid = a["args"]["task_id"]
     current = tp.get_task(tid)
     if current is not None and not current.is_deleted:
@@ -338,11 +362,12 @@ def _event_link(conn, a):
     args = a["args"]
     conn.execute(
         "INSERT INTO calendar_links (id, op_key, action_id, account_id, calendar_id, event_id, etag, html_link, summary, start_at, "
-        "end_at, tz, task_link_id, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "end_at, tz, task_link_id, status, created_at, updated_at, user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(op_key) DO UPDATE SET etag=excluded.etag, status=excluded.status, updated_at=excluded.updated_at",
         (new_id("cl"), a["op_key"], a["id"], a["account_id"], a["target_resource"], a.get("_ext_id"), a.get("_etag"),
          a.get("_url"), args.get("summary", ""), args.get("start", {}).get("dateTime"), args.get("end", {}).get("dateTime"),
-         args.get("start", {}).get("timeZone"), args.get("task_link_id"), a.get("_link_status", "active"), now_iso(), now_iso()))
+         args.get("start", {}).get("timeZone"), args.get("task_link_id"), a.get("_link_status", "active"), now_iso(), now_iso(),
+         a["user_id"]))
 
 
 def _check_event(ev, args: dict) -> tuple[bool, dict]:
@@ -383,7 +408,7 @@ def _fmt(dt: datetime) -> str:
 
 def h_event_create(conn, a: dict, reconcile_first: bool) -> dict:
     from jarvis.integrations.google_calendar import event_id_from_op_key
-    cp = A.calendar_provider(conn)
+    cp = A.calendar_provider(conn, a["user_id"])
     args = dict(a["args"])
     if args.get("attendees"):
         raise Blocked("failed", "Invitations/attendees are not supported in this release.")
@@ -415,7 +440,7 @@ def h_event_create(conn, a: dict, reconcile_first: bool) -> dict:
 
 
 def h_event_update(conn, a: dict, reconcile_first: bool) -> dict:
-    cp = A.calendar_provider(conn)
+    cp = A.calendar_provider(conn, a["user_id"])
     args = dict(a["args"])
     eid, cal = args.pop("event_id"), a["target_resource"]
     scope = args.pop("recurrence_scope", None)
@@ -447,7 +472,7 @@ def h_event_update(conn, a: dict, reconcile_first: bool) -> dict:
 
 
 def h_event_delete(conn, a: dict, reconcile_first: bool) -> dict:
-    cp = A.calendar_provider(conn)
+    cp = A.calendar_provider(conn, a["user_id"])
     eid, cal = a["args"]["event_id"], a["target_resource"]
     cur = cp.get_event(cal, eid)
     if cur is not None and cur.status != "cancelled":
@@ -473,7 +498,8 @@ def h_file(conn, a: dict, reconcile_first: bool) -> dict:
 
 
 
-def pause(conn: sqlite3.Connection, reason: str | None) -> dict:
+def pause(conn: sqlite3.Connection, reason: str | None, by: str | None = None) -> dict:
+    """Org-wide kill switch (admins): holds every user's queued writes."""
     with tx(conn):
         conn.execute("UPDATE control_state SET actions_paused=1, paused_at=?, paused_reason=? WHERE id=1", (now_iso(), reason))
         # Queued writes are held and their approvals revoked: resume never replays them automatically.
@@ -491,21 +517,25 @@ def pause(conn: sqlite3.Connection, reason: str | None) -> dict:
             conn.execute("UPDATE proposed_actions SET state='proposed' WHERE state='paused' AND proposal_version_id IN "
                          "(SELECT id FROM proposal_versions WHERE proposal_id=?)", (pid,))
             conn.execute("UPDATE proposals SET status='proposed', updated_at=? WHERE id=?", (now_iso(), pid))
-        audit(conn, "user", "control.paused", f"Actions paused ({len(held)} queued write(s) held)", data={"reason": reason})
-    return control_view(conn)
+        audit(conn, "user", "control.paused", f"Actions paused ({len(held)} queued write(s) held)", data={"reason": reason},
+              uid=by)
+    return control_view(conn, by)
 
 
-def resume(conn: sqlite3.Connection) -> dict:
+def resume(conn: sqlite3.Connection, by: str | None = None) -> dict:
     with tx(conn):
         conn.execute("UPDATE control_state SET actions_paused=0, resumed_at=? WHERE id=1", (now_iso(),))
-        audit(conn, "user", "control.resumed", "Actions resumed (held approvals are not replayed)")
-    return control_view(conn)
+        audit(conn, "user", "control.resumed", "Actions resumed (held approvals are not replayed)", uid=by)
+    return control_view(conn, by)
 
 
-def control_view(conn) -> dict:
+def control_view(conn, uid: str | None) -> dict:
+    """Pause state is org-wide; the in-flight list shows only the caller's own actions (summaries are content)."""
     c = row(conn, "SELECT * FROM control_state WHERE id=1") or {}
     in_flight = [dict(r) for r in conn.execute(
-        "SELECT id action_id, expected_effect summary, state FROM proposed_actions WHERE state IN ('executing','unknown')")]
+        "SELECT a.id action_id, a.expected_effect summary, a.state FROM proposed_actions a "
+        "JOIN proposal_versions v ON v.id=a.proposal_version_id JOIN proposals p ON p.id=v.proposal_id "
+        "WHERE a.state IN ('executing','unknown') AND p.user_id=?", (uid,))]
     return {"actions_paused": bool(c.get("actions_paused")), "paused_at": c.get("paused_at"), "reason": c.get("paused_reason"),
             "in_flight": in_flight,
             "note": "Operations listed as executing/unknown may already have reached the provider." if in_flight else None}

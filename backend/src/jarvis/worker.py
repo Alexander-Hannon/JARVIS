@@ -20,6 +20,24 @@ log = logging.getLogger("jarvis.worker")
 _stop = False
 
 
+OWNER = "usr_owner"
+
+
+def _job_uid(conn, kind: str, payload: dict) -> str:
+    """Who a job runs for. New jobs carry user_id; jobs queued before V5 are derived from their parent row (they were
+    all the first owner's)."""
+    if payload.get("user_id"):
+        return payload["user_id"]
+    if kind == "run_briefing":
+        r = row(conn, "SELECT s.user_id FROM schedule_runs r JOIN schedules s ON s.id=r.schedule_id WHERE r.id=?",
+                (payload["schedule_run_id"],))
+        return r["user_id"] if r else OWNER
+    if kind == "vault_index":
+        r = row(conn, "SELECT user_id FROM scope_grants WHERE id=?", (payload["root_id"],))
+        return r["user_id"] if r else OWNER
+    return OWNER
+
+
 def handle_job(conn, job: dict, worker_id: str) -> None:
     kind, payload = job["kind"], job["payload"]
     try:
@@ -40,7 +58,8 @@ def handle_job(conn, job: dict, worker_id: str) -> None:
                 return
             jobs.complete(conn, job["id"], worker_id, res)
         elif kind == "run_briefing":
-            b = workflows.generate(conn, payload["workflow"], force=False, schedule_run_id=payload["schedule_run_id"],
+            b = workflows.generate(conn, _job_uid(conn, kind, payload), payload["workflow"], force=False,
+                                   schedule_run_id=payload["schedule_run_id"],
                                    catch_up=payload.get("catch_up", False), scheduled=True)
             scheduler.complete_run(conn, payload["schedule_run_id"], True)
             jobs.complete(conn, job["id"], worker_id, {"briefing_id": b["id"]})
@@ -48,10 +67,10 @@ def handle_job(conn, job: dict, worker_id: str) -> None:
             jobs.complete(conn, job["id"], worker_id, N.send_push(conn, payload["notification_id"]))
         elif kind == "ics_refresh":
             from jarvis.integrations import service
-            jobs.complete(conn, job["id"], worker_id, service.ics_refresh(conn))
+            jobs.complete(conn, job["id"], worker_id, service.ics_refresh(conn, _job_uid(conn, kind, payload)))
         elif kind == "todoist_sync":
             from jarvis.integrations import service
-            jobs.complete(conn, job["id"], worker_id, service.todoist_sync(conn))
+            jobs.complete(conn, job["id"], worker_id, service.todoist_sync(conn, _job_uid(conn, kind, payload)))
         elif kind == "sandbox_build":
             from jarvis.sandbox.runtime import DockerRuntime
             jobs.complete(conn, job["id"], worker_id, {"log_tail": DockerRuntime().build()[-2000:]})
@@ -60,13 +79,14 @@ def handle_job(conn, job: dict, worker_id: str) -> None:
             jobs.complete(conn, job["id"], worker_id, telegram.send_notification(conn, payload["notification_id"]))
         elif kind == "run_mission":
             from jarvis.missions import service as missions
-            jobs.complete(conn, job["id"], worker_id, {"status": missions.run_now(conn, payload["mission_id"])["last_status"]})
+            jobs.complete(conn, job["id"], worker_id,
+                          {"status": missions.run_now(conn, None, payload["mission_id"])["last_status"]})
         elif kind == "mcp_discover":
             from jarvis.integrations import mcp_hub
             jobs.complete(conn, job["id"], worker_id, {"status": mcp_hub.discover(conn, payload["server_id"])["status"]})
         elif kind == "vault_index":
             from jarvis.knowledge import vault
-            jobs.complete(conn, job["id"], worker_id, vault.index_root(conn, payload["root_id"]))
+            jobs.complete(conn, job["id"], worker_id, vault.index_root(conn, _job_uid(conn, kind, payload), payload["root_id"]))
         else:
             jobs.fail(conn, job, worker_id, f"unknown job kind {kind}", retry=False)
     except Exception as e:  # visible failure, bounded retries
@@ -111,23 +131,30 @@ def maybe_periodic(conn, last: dict) -> None:
             telegram.poll(conn)            # outbound short-poll; only does work when a bot is connected
         except Exception:  # noqa: BLE001 — channel trouble must not stop the worker
             log.exception("telegram poll failed")
-    from jarvis.integrations import accounts as A
-    if now - last.get("ics", 0) > 3600 and A.get_account(conn, "ics"):
-        jobs.enqueue(conn, "ics_refresh", {}, dedupe_key=f"ics:{int(time.time() // 3600)}")
+    from jarvis.core.db import rows as _rows
+
+    def per_account(provider: str) -> list[dict]:
+        return _rows(conn, "SELECT a.id, a.user_id FROM integration_accounts a JOIN users u ON u.id=a.user_id "
+                           "WHERE a.provider=? AND a.status!='revoked' AND u.status='active'", (provider,))
+    if now - last.get("ics", 0) > 3600:
+        for a in per_account("ics"):          # one job per user's feed; dedupe per account and hour
+            jobs.enqueue(conn, "ics_refresh", {"user_id": a["user_id"]}, dedupe_key=f"ics:{a['id']}:{int(time.time() // 3600)}")
         last["ics"] = now
     if now - last.get("mcp", 0) > 3600:
         # Re-list reviewed servers hourly so a changed tool list is flagged (and disabled) even between calls.
-        from jarvis.core.db import rows as _rows
         for s in _rows(conn, "SELECT id FROM mcp_servers WHERE status='active'"):
             jobs.enqueue(conn, "mcp_discover", {"server_id": s["id"]}, dedupe_key=f"mcpd:{s['id']}:{int(time.time() // 3600)}")
         last["mcp"] = now
     if now - last.get("vault", 0) > 1800:
         from jarvis.knowledge import vault
-        for rid in vault.indexed_roots(conn):
-            jobs.enqueue(conn, "vault_index", {"root_id": rid}, dedupe_key=f"vault:{rid}:{int(time.time() // 1800)}")
+        for uid, rid in vault.all_indexed(conn):
+            jobs.enqueue(conn, "vault_index", {"root_id": rid, "user_id": uid},
+                         dedupe_key=f"vault:{rid}:{int(time.time() // 1800)}")
         last["vault"] = now
-    if now - last.get("todoist", 0) > 900 and A.get_account(conn, "todoist"):
-        jobs.enqueue(conn, "todoist_sync", {}, dedupe_key=f"tsync:{int(time.time() // 900)}")
+    if now - last.get("todoist", 0) > 900:
+        for a in per_account("todoist"):
+            jobs.enqueue(conn, "todoist_sync", {"user_id": a["user_id"]},
+                         dedupe_key=f"tsync:{a['id']}:{int(time.time() // 900)}")
         last["todoist"] = now
 
 

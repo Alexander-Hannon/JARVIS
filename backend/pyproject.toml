@@ -27,6 +27,7 @@ dependencies = [
     "pywebpush>=2.5.0",
     "recurring-ical-events>=3.8.2",
     "uvicorn[standard]>=0.54.0",
+    "webauthn>=2.5",
 ]
 
 [project.scripts]

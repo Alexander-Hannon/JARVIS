@@ -2,6 +2,7 @@
 
 Every source reports its own status (ok / stale / unavailable / not_connected) so callers can say
 "calendar not connected" instead of "nothing scheduled". Missing data is never rendered as "all clear".
+Everything is per user: functions take `uid`, and every cache key includes it.
 """
 from __future__ import annotations
 
@@ -19,13 +20,13 @@ _cache: dict[str, tuple[float, object]] = {}
 CACHE_S = 60
 
 
-def user_tz(conn) -> str:
-    r = row(conn, "SELECT timezone FROM user_settings WHERE id=1")
-    return r["timezone"] if r else "America/Chicago"
+def user_tz(conn, uid: str) -> str:
+    from jarvis.core import settings as S
+    return S.user_tz(conn, uid)
 
 
-def local_today(conn) -> date:
-    return utcnow().astimezone(ZoneInfo(user_tz(conn))).date()
+def local_today(conn, uid: str) -> date:
+    return utcnow().astimezone(ZoneInfo(user_tz(conn, uid))).date()
 
 
 def day_bounds(d: date, tz: str) -> tuple[datetime, datetime]:
@@ -48,24 +49,24 @@ def _cached(key: str, fn, force: bool = False):
     return val
 
 
-def read_calendars(conn) -> tuple[dict | None, list[dict]]:
-    acct = A.get_account(conn, "google")
-    if "google_calendar" in A._overrides:
+def read_calendars(conn, uid: str) -> tuple[dict | None, list[dict]]:
+    acct = A.get_account(conn, uid, "google")
+    if A._override(uid, "google_calendar") is not None:
         acct = acct or {"id": "sim-google", "config": {}}
-        return acct, rows(conn, "SELECT * FROM scope_grants WHERE resource_type='calendar' AND access='read'") or \
-            [{"resource_id": "primary", "resource_name": "Primary (simulated)"}]
+        return acct, rows(conn, "SELECT * FROM scope_grants WHERE user_id=? AND resource_type='calendar' AND access='read'",
+                          (uid,)) or [{"resource_id": "primary", "resource_name": "Primary (simulated)"}]
     if not acct:
         return None, []
     return acct, A.grants(conn, acct["id"], "calendar", "read")
 
 
-def events_between(conn, start: datetime, end: datetime, force: bool = False) -> dict:
+def events_between(conn, uid: str, start: datetime, end: datetime, force: bool = False) -> dict:
     """{"status", "detail", "events": [...normalized...], "last_sync"}"""
     try:
-        cp = A.calendar_provider(conn)
+        cp = A.calendar_provider(conn, uid)
     except A.NotConnected as e:
         return {"status": "not_connected", "detail": str(e), "events": []}
-    acct, cals = read_calendars(conn)
+    acct, cals = read_calendars(conn, uid)
     if not cals:
         return {"status": "not_connected", "detail": "No calendars selected for reading.", "events": []}
 
@@ -82,7 +83,7 @@ def events_between(conn, start: datetime, end: datetime, force: bool = False) ->
         out.sort(key=lambda e: e["sort"])
         return out, errors
     try:
-        evs, errors = _cached(f"ev:{iso(start)}:{iso(end)}", load, force)
+        evs, errors = _cached(f"ev:{uid}:{iso(start)}:{iso(end)}", load, force)
     except ProviderError as e:
         return {"status": "unavailable", "detail": f"Calendar read failed: {e.kind}", "events": []}
     if acct and acct.get("id") and not A.is_simulated(cp):
@@ -103,17 +104,17 @@ def _norm_event(ev, cal_name: str | None) -> dict:
             "recurring": bool(ev.recurring_event_id), "sort": sort, "location": (ev.raw or {}).get("location")}
 
 
-def tasks_snapshot(conn, force: bool = False) -> dict:
+def tasks_snapshot(conn, uid: str, force: bool = False) -> dict:
     try:
-        tp = A.task_provider(conn)
+        tp = A.task_provider(conn, uid)
     except A.NotConnected as e:
-        pending = rows(conn, "SELECT content, due, status FROM task_links WHERE status='pending_sync'")
+        pending = rows(conn, "SELECT content, due, status FROM task_links WHERE user_id=? AND status='pending_sync'", (uid,))
         return {"status": "not_connected", "detail": str(e), "tasks": [], "pending_sync": pending}
     try:
-        tasks = _cached("tasks", lambda: tp.list_tasks(), force)
+        tasks = _cached(f"tasks:{uid}", lambda: tp.list_tasks(), force)
     except ProviderError as e:
         return {"status": "unavailable", "detail": f"Todoist read failed: {e.kind}", "tasks": []}
-    acct = A.get_account(conn, "todoist")
+    acct = A.get_account(conn, uid, "todoist")
     if acct and not A.is_simulated(tp):
         A.mark_synced(conn, acct["id"])
     out = [{"id": t.id, "content": t.content, "due": t.due, "priority": t.priority, "project_id": t.project_id, "url": t.url,
@@ -135,8 +136,8 @@ def due_on_or_before(tasks: list[dict], d: date) -> tuple[list[dict], list[dict]
     return due_today, overdue
 
 
-def deadlines_snapshot(conn, start: date, days: int = 7) -> dict:
-    acct = A.get_account(conn, "ics")
+def deadlines_snapshot(conn, uid: str, start: date, days: int = 7) -> dict:
+    acct = A.get_account(conn, uid, "ics")
     if not acct:
         return {"status": "not_connected", "detail": "No deadline feed configured.", "items": []}
     items = rows(conn, "SELECT id, summary, start_at, end_at, all_day, local_date, course, role, status, url, also_in_calendar "
@@ -153,8 +154,8 @@ def deadlines_snapshot(conn, start: date, days: int = 7) -> dict:
             "note": "Deadline feed may be incomplete; it is not full Canvas access."}
 
 
-def current_plan(conn, d: date) -> dict | None:
-    p = row(conn, "SELECT * FROM daily_plans WHERE plan_date=?", (d.isoformat(),))
+def current_plan(conn, uid: str, d: date) -> dict | None:
+    p = row(conn, "SELECT * FROM daily_plans WHERE user_id=? AND plan_date=?", (uid, d.isoformat()))
     if not p or not p["current_version"]:
         return None
     v = row(conn, "SELECT * FROM daily_plan_versions WHERE plan_id=? AND version=?", (p["id"], p["current_version"]))
@@ -204,28 +205,28 @@ def _norm_task(text: str) -> str:
     return re.sub(r"\s+", " ", t).strip().lower()
 
 
-def completed_today(conn, d: date, tz: str, force: bool = False) -> dict[str, str]:
+def completed_today(conn, uid: str, d: date, tz: str, force: bool = False) -> dict[str, str]:
     """Tasks finished today -> when. JARVIS's own completions count immediately (task_links); completions made directly
     in Todoist come from its completed-tasks API. Positive evidence only: a plan line is never assumed done."""
     start, end = (iso(x) for x in day_bounds(d, tz))
     out: dict[str, str] = {}
-    for r in rows(conn, "SELECT content, updated_at FROM task_links WHERE status='completed' AND updated_at>=? AND updated_at<?",
-                  (start, end)):
+    for r in rows(conn, "SELECT content, updated_at FROM task_links WHERE user_id=? AND status='completed' AND updated_at>=? "
+                        "AND updated_at<?", (uid, start, end)):
         out[_norm_task(r["content"])] = r["updated_at"]
     try:
-        tp = A.task_provider(conn)
-        for t in _cached(f"done:{d}", lambda: tp.list_completed(start, end), force):
+        tp = A.task_provider(conn, uid)
+        for t in _cached(f"done:{uid}:{d}", lambda: tp.list_completed(start, end), force):
             out.setdefault(_norm_task(t.content), t.updated_at or end)
     except (A.NotConnected, ProviderError):
         pass
     return out
 
 
-def plan_progress(conn, plan: dict | None, d: date, tz: str, force: bool = False) -> dict | None:
-    """The accepted plan stays AJ's; progress is computed on read so the mission stays current as tasks get done."""
+def plan_progress(conn, uid: str, plan: dict | None, d: date, tz: str, force: bool = False) -> dict | None:
+    """The accepted plan stays the user's; progress is computed on read so the mission stays current as tasks get done."""
     if not plan:
         return None
-    done = completed_today(conn, d, tz, force)
+    done = completed_today(conn, uid, d, tz, force)
     items = [{"text": p if isinstance(p, str) else str(p), "done": _norm_task(p if isinstance(p, str) else str(p)) in done}
              for p in plan.get("priorities") or []]
     all_done = bool(items) and all(i["done"] for i in items)
@@ -237,17 +238,18 @@ def plan_progress(conn, plan: dict | None, d: date, tz: str, force: bool = False
     return plan | {"progress": items, "all_done": all_done, "next_action": next_action}
 
 
-def today(conn, force: bool = False, d: date | None = None) -> dict:
-    tz = user_tz(conn)
-    d = d or local_today(conn)
+def today(conn, uid: str, force: bool = False, d: date | None = None) -> dict:
+    tz = user_tz(conn, uid)
+    d = d or local_today(conn, uid)
     start, end = day_bounds(d, tz)
-    cal = events_between(conn, start, end, force)
-    tsk = tasks_snapshot(conn, force)
+    cal = events_between(conn, uid, start, end, force)
+    tsk = tasks_snapshot(conn, uid, force)
     due_today, overdue = due_on_or_before(tsk["tasks"], d)
-    dl = deadlines_snapshot(conn, d)
+    dl = deadlines_snapshot(conn, uid, d)
     evs = cal["events"]
     return {
-        "date": d.isoformat(), "tz": tz, "now": now_iso(), "plan": plan_progress(conn, current_plan(conn, d), d, tz, force),
+        "date": d.isoformat(), "tz": tz, "now": now_iso(),
+        "plan": plan_progress(conn, uid, current_plan(conn, uid, d), d, tz, force),
         "agenda": evs, "tasks_due": due_today, "overdue": overdue, "deadlines": dl["items"],
         "conflicts": conflicts(evs),
         "work_windows": work_windows(evs, d, tz) if cal["status"] in ("ok", "partial") else [],
@@ -260,9 +262,9 @@ def today(conn, force: bool = False, d: date | None = None) -> dict:
     }
 
 
-def free_slots(conn, d: date, minutes: int, part_of_day: str | None, tz: str) -> dict:
+def free_slots(conn, uid: str, d: date, minutes: int, part_of_day: str | None, tz: str) -> dict:
     start, end = day_bounds(d, tz)
-    cal = events_between(conn, start, end, force=True)
+    cal = events_between(conn, uid, start, end, force=True)
     if cal["status"] not in ("ok", "partial"):
         return {"status": cal["status"], "detail": cal.get("detail"), "slots": []}
     ranges = {"morning": (7, 12), "afternoon": (12, 17), "evening": (17, 22), None: (7, 22)}

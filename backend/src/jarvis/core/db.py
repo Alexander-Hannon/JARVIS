@@ -26,6 +26,10 @@ def _connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
+# A migration containing this line runs with foreign keys off (see migrate()).
+FK_OFF_MARKER = "-- jarvis:foreign-keys-off"
+
+
 def migration_files() -> list[tuple[int, str, str]]:
     out = []
     pkg = resources.files("jarvis.migrations")
@@ -43,16 +47,29 @@ def migrate(conn: sqlite3.Connection) -> list[str]:
     for version, name, sql in migration_files():
         if version in applied:
             continue
+        # Table rebuilds (SQLite can't alter a UNIQUE/CHECK in place) follow SQLite's documented procedure: foreign keys
+        # off *outside* the transaction so DROP TABLE doesn't cascade-delete children, then foreign_key_check before
+        # COMMIT so a rebuild that broke a reference aborts the whole migration.
+        fk_off = FK_OFF_MARKER in sql
+        if fk_off:
+            conn.execute("PRAGMA foreign_keys = OFF")
         conn.execute("BEGIN IMMEDIATE")
         try:
             # executescript would commit implicitly; run statements one by one inside our transaction
             for stmt in _split_sql(sql):
                 conn.execute(stmt)
+            if fk_off:
+                bad = conn.execute("PRAGMA foreign_key_check").fetchall()
+                if bad:
+                    raise sqlite3.IntegrityError(f"{name}: foreign key violations after rebuild: {bad[:5]}")
             conn.execute("INSERT INTO schema_migrations VALUES (?,?,datetime('now'))", (version, name))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
+        finally:
+            if fk_off:
+                conn.execute("PRAGMA foreign_keys = ON")
         done.append(name)
     return done
 

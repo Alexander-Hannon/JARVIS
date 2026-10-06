@@ -32,21 +32,21 @@ def ref(box: str, mid: str) -> str:
     return f"{box}:{mid}"
 
 
-def parse_ref(conn, r: str) -> tuple[str, str]:
+def parse_ref(conn, uid: str, r: str) -> tuple[str, str]:
     box, _, mid = (r or "").partition(":")
     if box not in A.MAILBOXES or not mid:
-        boxes = A.connected_mailboxes(conn)
+        boxes = A.connected_mailboxes(conn, uid)
         if len(boxes) == 1 and r:
             return boxes[0], r
         raise MailError("bad_ref", f"Unknown message reference '{r}'. Use the id exactly as returned (e.g. gmail:abc).")
     return box, mid
 
 
-def status(conn) -> dict:
-    boxes = A.connected_mailboxes(conn)
+def status(conn, uid: str) -> dict:
+    boxes = A.connected_mailboxes(conn, uid)
     out = {}
     for b in A.MAILBOXES:
-        acct = A.mail_account(conn, b)
+        acct = A.mail_account(conn, uid, b)
         out[b] = {"status": "connected" if b in boxes else "not_connected",
                   "address": acct["external_account_id"] if acct else None}
     return out
@@ -72,16 +72,17 @@ def _view(box: str, m: MailMessage, me: set[str]) -> dict:
                 "from_name": parseaddr(m.sender)[0] or m.sender_email}
 
 
-def inbox(conn: sqlite3.Connection, *, unread_only: bool = True, limit: int = 20, query: str | None = None) -> dict:
+def inbox(conn: sqlite3.Connection, uid: str, *, unread_only: bool = True, limit: int = 20, query: str | None = None) -> dict:
     """Aggregate across mailboxes. A failing mailbox is reported as such — never silently shown as an empty inbox."""
     items: list[dict] = []
     sources: dict[str, dict] = {}
+    connected = A.connected_mailboxes(conn, uid)
     for box in A.MAILBOXES:
-        if box not in A.connected_mailboxes(conn):
+        if box not in connected:
             sources[box] = {"status": "not_connected"}
             continue
         try:
-            mp = A.mail_provider(conn, box)
+            mp = A.mail_provider(conn, uid, box)
             me = {(mp.whoami().get("email") or "").lower()}
             msgs = mp.list_messages(query, limit, unread_only=unread_only)
             items += [_view(box, m, me) for m in msgs]
@@ -96,9 +97,9 @@ def inbox(conn: sqlite3.Connection, *, unread_only: bool = True, limit: int = 20
     return {"items": items[:limit], "counts": counts, "sources": sources}
 
 
-def read_thread(conn, message_ref: str) -> dict:
-    box, mid = parse_ref(conn, message_ref)
-    mp = A.mail_provider(conn, box)
+def read_thread(conn, uid: str, message_ref: str) -> dict:
+    box, mid = parse_ref(conn, uid, message_ref)
+    mp = A.mail_provider(conn, uid, box)
     m = mp.get_message(mid)
     if m is None:
         raise MailError("not_found", "That email no longer exists.")

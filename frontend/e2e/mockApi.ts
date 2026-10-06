@@ -127,6 +127,9 @@ type Handler = (req: Request, call: Call) => Promise<{ status?: number; json?: u
 export class MockApi {
   calls: Call[] = [];
   authenticated = true;
+  user: { id: string; username: string; display_name: string; role: string; auth_level: string } =
+    { id: 'usr_owner', username: 'aj', display_name: 'AJ', role: 'owner', auth_level: 'mfa' };
+  mfa = { required: false, enrolled: false, satisfied: true };
   control: ControlState = { actions_paused: false, paused_at: null, reason: null, in_flight: [] };
   private handlers: { method: string; path: string | RegExp; fn: Handler }[] = [];
 
@@ -176,7 +179,11 @@ export class MockApi {
 
   private defaults(call: Call, p: string): { status?: number; json?: unknown } {
     const m = call.method;
-    if (p === '/api/auth/status') return { json: { owner_exists: true, authenticated: this.authenticated, csrf_token: this.authenticated ? CSRF : null, remote_mode: false, setup_allowed: false } };
+    if (p === '/api/auth/status') {
+      return { json: { owner_exists: true, authenticated: this.authenticated, csrf_token: this.authenticated ? CSRF : null, remote_mode: false,
+                       setup_allowed: false, user: this.authenticated ? this.user : null, mfa: this.authenticated ? this.mfa : null } };
+    }
+    if (p === '/api/auth/mfa' && m === 'GET') return { json: { ...this.mfa, policy: 'privileged', methods: [], recovery_codes_left: 0 } };
     if (!this.authenticated && !p.startsWith('/api/auth/')) return { status: 401, json: { detail: 'Not authenticated' } };
     if (m !== 'GET' && call.headers['x-csrf-token'] !== CSRF) return { status: 403, json: { detail: { code: 'csrf', message: 'CSRF token missing' } } };
     if (p === '/api/control' && m === 'GET') return { json: this.control };

@@ -29,6 +29,8 @@ def conn(tmp_path, monkeypatch):
     reset_settings_cache()
     reset_init_cache()
     c = get_conn()
+    c.execute("INSERT OR IGNORE INTO users (id, username, display_name, role, created_at) VALUES "
+              "('usr_owner', 'aj', 'AJ', 'owner', '2026-09-28T00:00:00Z')")
     yield c
     c.close()
     reset_settings_cache()

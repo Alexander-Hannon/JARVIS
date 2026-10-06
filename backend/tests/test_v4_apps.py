@@ -53,7 +53,7 @@ def apps(conn):
     conn.execute("BEGIN")
     for name, f in fk.items():
         A.set_override(name, f)
-        ids[name] = A.upsert_account(conn, name, f"{name} (SIMULATED)", "x", "api_token", external_account_id=name)
+        ids[name] = A.upsert_account(conn, "usr_owner", name, f"{name} (SIMULATED)", "x", "api_token", external_account_id=name)
     conn.execute("COMMIT")
     fk["ids"] = ids
     return fk
@@ -178,8 +178,8 @@ def test_executor_rederives_security_tier(client, conn, apps):
     grant(conn, apps, "homeassistant", "ha_entity", "write", [("lock.front_door", "Front door")])
     spec = P.ActionSpec(action_type="home.control", args={"service": "unlock", "data": {}}, timezone="America/Chicago",
                         expected_effect="forged", account_id=apps["ids"]["homeassistant"], target_resource="lock.front_door")
-    pid = P.create(conn, "forged", [spec], "forged", conversation_id=None)
-    v = P.view(conn, pid)
+    pid = P.create(conn, "usr_owner", "forged", [spec], "forged", conversation_id=None)
+    v = P.view(conn, "usr_owner", pid)
     approve(client, v)
     run_worker(conn)
     item = client.get(f"/api/proposals/{pid}").json()["items"][0]

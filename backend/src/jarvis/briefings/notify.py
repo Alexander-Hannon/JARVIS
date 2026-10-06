@@ -1,7 +1,8 @@
 """In-app notification inbox + Web Push delivery.
 
 Delivery states are distinct: generated (row exists) → queued (push job) → accepted (push service
-returned 201) → opened (client reported click). "Accepted" is NOT proof AJ saw it.
+returned 201) → opened (client reported click). "Accepted" is NOT proof the user saw it.
+Notifications belong to one user and push only to that user's own devices.
 Lock-screen payload is minimal by default (title only + generic body) unless details are opted in.
 """
 from __future__ import annotations
@@ -12,22 +13,23 @@ import sqlite3
 
 from jarvis.config import get_settings
 from jarvis.core import jobs
+from jarvis.core import settings as S
 from jarvis.core.db import jload, row, rows
 from jarvis.core.util import new_id, now_iso
 
 log = logging.getLogger("jarvis.notify")
 
 
-def notify(conn: sqlite3.Connection, kind: str, title: str, body: str, ref_type: str | None = None,
+def notify(conn: sqlite3.Connection, uid: str, kind: str, title: str, body: str, ref_type: str | None = None,
            ref_id: str | None = None, push: bool | None = None) -> str:
     nid = new_id("ntf")
-    conn.execute("INSERT INTO notifications (id, kind, title, body, ref_type, ref_id, created_at) VALUES (?,?,?,?,?,?,?)",
-                 (nid, kind, title[:200], body[:4000], ref_type, ref_id, now_iso()))
-    settings = jload((row(conn, "SELECT data FROM user_settings WHERE id=1") or {}).get("data"), {}) or {}
+    conn.execute("INSERT INTO notifications (id, user_id, kind, title, body, ref_type, ref_id, created_at) "
+                 "VALUES (?,?,?,?,?,?,?,?)", (nid, uid, kind, title[:200], body[:4000], ref_type, ref_id, now_iso()))
+    settings = S.user_data(conn, uid)
     want_push = push if push is not None else settings.get("notifications", {}).get("push_kinds", {}).get(kind, kind in (
         "briefing", "action_result"))
     if want_push:
-        if row(conn, "SELECT 1 FROM push_subscriptions WHERE revoked_at IS NULL"):
+        if row(conn, "SELECT 1 FROM push_subscriptions WHERE user_id=? AND revoked_at IS NULL", (uid,)):
             conn.execute("UPDATE notifications SET push_status='queued' WHERE id=?", (nid,))
             jobs.enqueue(conn, "send_push", {"notification_id": nid}, dedupe_key=f"push:{nid}")
         else:
@@ -57,12 +59,11 @@ def send_push(conn: sqlite3.Connection, notification_id: str) -> dict:
         return {"status": "not_configured"}
     from pywebpush import WebPushException, webpush
 
-    settings = jload((row(conn, "SELECT data FROM user_settings WHERE id=1") or {}).get("data"), {}) or {}
-    details = settings.get("notifications", {}).get("lock_screen_details", False)
+    details = S.user_data(conn, n["user_id"]).get("notifications", {}).get("lock_screen_details", False)
     payload = json.dumps({"title": n["title"], "body": n["body"][:180] if details else "Open Jarvis for details.",
                           "id": n["id"], "url": f"/?notification={n['id']}"})
     accepted = 0
-    for sub in rows(conn, "SELECT * FROM push_subscriptions WHERE revoked_at IS NULL"):
+    for sub in rows(conn, "SELECT * FROM push_subscriptions WHERE user_id=? AND revoked_at IS NULL", (n["user_id"],)):
         try:
             webpush(subscription_info={"endpoint": sub["endpoint"], "keys": jload(sub["keys"])}, data=payload,
                     vapid_private_key=s.vapid_private_key, vapid_claims={"sub": s.vapid_subject}, ttl=3600)

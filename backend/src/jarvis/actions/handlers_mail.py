@@ -29,7 +29,7 @@ def _check(d, args: dict, reply: bool) -> tuple[bool, dict]:
 
 def h_draft_create(conn, a: dict, reconcile_first: bool) -> dict:
     box = a["provider"]
-    mp = A.mail_provider(conn, box)
+    mp = A.mail_provider(conn, a["user_id"], box)
     args = a["args"]
     reply_id = args.get("reply_to_message_id")
     sim = A.is_simulated(mp)
@@ -56,7 +56,7 @@ def h_draft_create(conn, a: dict, reconcile_first: bool) -> dict:
 
 
 def h_draft_delete(conn, a: dict, reconcile_first: bool) -> dict:
-    mp = A.mail_provider(conn, a["provider"])
+    mp = A.mail_provider(conn, a["user_id"], a["provider"])
     did = a["args"]["draft_id"]
     if mp.get_draft(did) is not None:
         mp.delete_draft(did)
@@ -67,7 +67,7 @@ def h_draft_delete(conn, a: dict, reconcile_first: bool) -> dict:
 
 def h_send(conn, a: dict, reconcile_first: bool) -> dict:
     box = a["provider"]
-    mp = A.mail_provider(conn, box)
+    mp = A.mail_provider(conn, a["user_id"], box)
     did = a["args"]["draft_id"]
     draft = mp.get_draft(did)
     if reconcile_first:

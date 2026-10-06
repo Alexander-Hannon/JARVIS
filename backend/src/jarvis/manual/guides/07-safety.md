@@ -6,3 +6,5 @@
 - If a write times out, JARVIS checks whether it landed before trying again. It never sends an email twice.
 - Secrets are stored encrypted and never shown to the model.
 - JARVIS listens only on this machine unless you set up remote access yourself.
+- Each person's data, connections and sandbox are private to them. JARVIS acts only through the accounts of the person
+  who asked, and only that person (or their own rule) can approve their plans.

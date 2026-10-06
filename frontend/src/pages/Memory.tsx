@@ -317,6 +317,8 @@ function DocumentsTab() {
                 <li key={d.id} className="card doc">
                   <div className="row gap wrap">
                     <strong className="grow">{d.title}</strong>
+                    {d.own === false && <Badge tone="info">shared with you</Badge>}
+                    {d.own !== false && d.visibility === 'org' && <Badge tone="accent">shared with your organization</Badge>}
                     <StateBadge state={d.status} />
                     <span className="muted small">
                       {d.mime} · v{d.version} · {segCount(d)} segments · {fmtDateTime(d.created_at)}
@@ -343,6 +345,26 @@ function DocumentsTab() {
                     <button className="btn btn-small" type="button" onClick={() => setOpen(open === d.id ? null : d.id)} aria-expanded={open === d.id}>
                       {open === d.id ? 'Hide' : 'Segments & evidence'}
                     </button>
+                    {d.own !== false && (
+                      <button
+                        className="btn btn-small"
+                        type="button"
+                        data-testid="share-toggle"
+                        onClick={async () => {
+                          const share = d.visibility !== 'org';
+                          if (share && !window.confirm(`Share "${d.title}" with everyone in your organization? They can read and search it, but not change or delete it.`)) return;
+                          try {
+                            await api.setDocumentVisibility(d.id, share ? 'org' : 'private');
+                            void docs.reload();
+                          } catch (x) {
+                            setUploadErr(errorMessage(x));
+                          }
+                        }}
+                      >
+                        {d.visibility === 'org' ? 'Make private' : 'Share with organization'}
+                      </button>
+                    )}
+                    {d.own !== false && (
                     <button
                       className="btn btn-small btn-danger-ghost"
                       type="button"
@@ -358,6 +380,7 @@ function DocumentsTab() {
                     >
                       Delete
                     </button>
+                    )}
                   </div>
                   {open === d.id && <DocDetail id={d.id} />}
                 </li>

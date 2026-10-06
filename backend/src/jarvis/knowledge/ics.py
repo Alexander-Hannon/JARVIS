@@ -126,8 +126,10 @@ def upsert_deadlines(conn: sqlite3.Connection, account_id: str, items: list[dict
     the row's local_date is inside [window_start, window_end). A stale item (lower SEQUENCE than
     stored) does not overwrite newer data.
     """
-    mappings = rows(conn, "SELECT pattern, course, role FROM course_mappings" +  # nosec B608 fixed clause
-                    (" WHERE confirmed = 1" if confirmed_mappings_only else ""))
+    # Course mappings belong to the feed's owner.
+    owner = row(conn, "SELECT user_id FROM integration_accounts WHERE id=?", (account_id,))
+    mappings = rows(conn, "SELECT pattern, course, role FROM course_mappings WHERE user_id=?" +  # nosec B608 fixed clause
+                    (" AND confirmed = 1" if confirmed_mappings_only else ""), (owner["user_id"] if owner else None,))
     counts = {"added": 0, "updated": 0, "cancelled": 0, "unchanged": 0}
     now = now_iso()
     seen: set[tuple[str, str]] = set()

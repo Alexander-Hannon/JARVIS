@@ -33,13 +33,13 @@ def test_proxied_loopback_request_cannot_set_up_without_token(app, conn):
     fwd = {"X-Forwarded-For": "203.0.113.9"}
     st = c.get("/api/auth/status", headers=fwd).json()
     assert st["setup_allowed"] is False and st["setup_token_required"] is True
-    assert c.post("/api/auth/setup", json={"password": PASSWORD}, headers=fwd).status_code == 403
-    assert c.post("/api/auth/setup", json={"password": PASSWORD, "setup_token": "AAAA-BBBB-CCCC-DDDD"},
+    assert c.post("/api/auth/setup", json={"username": "aj", "password": PASSWORD}, headers=fwd).status_code == 403
+    assert c.post("/api/auth/setup", json={"username": "aj", "password": PASSWORD, "setup_token": "AAAA-BBBB-CCCC-DDDD"},
                   headers=fwd).status_code == 403
     conn.execute("BEGIN")
     token = auth.issue_setup_token(conn)
     conn.execute("COMMIT")
-    r = c.post("/api/auth/setup", json={"password": PASSWORD, "setup_token": token.lower()}, headers=fwd)
+    r = c.post("/api/auth/setup", json={"username": "aj", "password": PASSWORD, "setup_token": token.lower()}, headers=fwd)
     assert r.status_code == 200, r.text
     assert conn.execute("SELECT used_at FROM setup_tokens").fetchone()[0] is not None
 
@@ -59,7 +59,7 @@ def test_remote_mode_requires_token_even_from_direct_loopback(app, monkeypatch):
     _reload_settings(monkeypatch, remote_mode="true")
     c = _tc(app, "127.0.0.1")
     assert c.get("/api/auth/status").json()["setup_token_required"] is True
-    assert c.post("/api/auth/setup", json={"password": PASSWORD}).status_code == 403
+    assert c.post("/api/auth/setup", json={"username": "aj", "password": PASSWORD}).status_code == 403
 
 
 # ---------------------------------------------------------------- sessions
@@ -76,7 +76,7 @@ def test_idle_session_is_ended_for_good(client, conn):
 def test_login_rotates_the_session_the_browser_already_had(client, conn):
     old = conn.execute("SELECT id FROM sessions WHERE revoked_at IS NULL").fetchall()
     assert len(old) == 1
-    assert client.c.post("/api/auth/login", json={"password": PASSWORD}).status_code == 200
+    assert client.c.post("/api/auth/login", json={"username": "aj", "password": PASSWORD}).status_code == 200
     assert conn.execute("SELECT revoked_at FROM sessions WHERE id=?", (old[0][0],)).fetchone()[0] is not None
     s = conn.execute("SELECT ip, user_agent FROM sessions WHERE revoked_at IS NULL").fetchone()
     assert s["ip"] == "127.0.0.1" and s["user_agent"]
@@ -85,25 +85,30 @@ def test_login_rotates_the_session_the_browser_already_had(client, conn):
 # ---------------------------------------------------------------- throttles
 def test_attacker_ip_is_throttled_without_locking_out_the_owner(client):
     app = client.c.app
+    phone = _tc(app, "198.51.100.7")
+    assert phone.post("/api/auth/login", json={"username": "aj", "password": PASSWORD}).status_code == 200   # known device
     bad = _tc(app, "203.0.113.5")
     for _ in range(10):
-        assert bad.post("/api/auth/login", json={"password": "wrong password!!"}).status_code == 401
-    assert bad.post("/api/auth/login", json={"password": PASSWORD}).status_code == 429   # even the right one
-    other = _tc(app, "198.51.100.7")
-    assert other.post("/api/auth/login", json={"password": PASSWORD}).status_code == 200
+        assert bad.post("/api/auth/login", json={"username": "aj", "password": "wrong password!!"}).status_code == 401
+    assert bad.post("/api/auth/login", json={"username": "aj", "password": PASSWORD}).status_code == 429   # even the right one
+    assert phone.post("/api/auth/login", json={"username": "aj", "password": PASSWORD}).status_code == 200
+    # a brand-new device for the attacked account waits out the window (per-account limit, 800-171 3.1.8)
+    assert _tc(app, "192.0.2.77").post("/api/auth/login", json={"username": "aj", "password": PASSWORD}).status_code == 429
+    # other accounts are unaffected (the limit is per username, not global)
+    assert _tc(app, "192.0.2.78").post("/api/auth/login", json={"username": "someone", "password": "x" * 12}).status_code == 401
 
 
 def test_distributed_guessing_only_admits_known_devices(client):
     app = client.c.app
     phone = _tc(app, "192.0.2.50")
-    assert phone.post("/api/auth/login", json={"password": PASSWORD}).status_code == 200   # a known device
+    assert phone.post("/api/auth/login", json={"username": "aj", "password": PASSWORD}).status_code == 200   # a known device
     for i in range(3):
         c = _tc(app, f"203.0.113.{10 + i}")
         for _ in range(10):
-            c.post("/api/auth/login", json={"password": "nope nope nope"})
+            c.post("/api/auth/login", json={"username": "aj", "password": "nope nope nope"})
     stranger = _tc(app, "198.51.100.99")
-    assert stranger.post("/api/auth/login", json={"password": PASSWORD}).status_code == 429
-    assert _tc(app, "192.0.2.50").post("/api/auth/login", json={"password": PASSWORD}).status_code == 200
+    assert stranger.post("/api/auth/login", json={"username": "aj", "password": PASSWORD}).status_code == 429
+    assert _tc(app, "192.0.2.50").post("/api/auth/login", json={"username": "aj", "password": PASSWORD}).status_code == 200
 
 
 def test_throttle_survives_restart(client, env):
@@ -111,9 +116,9 @@ def test_throttle_survives_restart(client, env):
     from jarvis.api.app import create_app
     bad = _tc(client.c.app, "203.0.113.77")
     for _ in range(10):
-        bad.post("/api/auth/login", json={"password": "wrong password!!"})
+        bad.post("/api/auth/login", json={"username": "aj", "password": "wrong password!!"})
     fresh = _tc(create_app(), "203.0.113.77")
-    assert fresh.post("/api/auth/login", json={"password": PASSWORD}).status_code == 429
+    assert fresh.post("/api/auth/login", json={"username": "aj", "password": PASSWORD}).status_code == 429
 
 
 def test_pairing_codes_are_rate_limited(client):
@@ -128,15 +133,15 @@ def test_failed_login_is_audited_with_the_real_client_ip(client, conn, monkeypat
     _reload_settings(monkeypatch, trusted_proxies=json.dumps(["127.0.0.1"]))
     c = _tc(client.c.app, "127.0.0.1")
     # left-most XFF entries are client-controlled; the hop the trusted proxy appended is the client
-    c.post("/api/auth/login", json={"password": "wrong password!!"},
+    c.post("/api/auth/login", json={"username": "aj", "password": "wrong password!!"},
            headers={"X-Forwarded-For": "6.6.6.6, 198.51.100.4", "User-Agent": "probe/1"})
     data = json.loads(conn.execute("SELECT data FROM audit_events WHERE kind='auth.login_failed' ORDER BY id DESC").fetchone()[0])
-    assert data == {"ip": "198.51.100.4", "user_agent": "probe/1"}
+    assert data == {"ip": "198.51.100.4", "user_agent": "probe/1", "username": "aj"}
 
 
 def test_untrusted_peer_cannot_spoof_its_ip(client, conn):
     c = _tc(client.c.app, "203.0.113.30")
-    c.post("/api/auth/login", json={"password": "wrong password!!"}, headers={"X-Forwarded-For": "192.0.2.1"})
+    c.post("/api/auth/login", json={"username": "aj", "password": "wrong password!!"}, headers={"X-Forwarded-For": "192.0.2.1"})
     data = json.loads(conn.execute("SELECT data FROM audit_events WHERE kind='auth.login_failed' ORDER BY id DESC").fetchone()[0])
     assert data["ip"] == "203.0.113.30"
 
@@ -154,7 +159,7 @@ def test_csp_and_hsts(app):
 
 def test_session_cookie_secure_on_https(app):
     c = _tc(app, "127.0.0.1", base_url="https://testserver")
-    r = c.post("/api/auth/setup", json={"password": PASSWORD})
+    r = c.post("/api/auth/setup", json={"username": "aj", "password": PASSWORD})
     assert r.status_code == 200
     assert "secure" in r.headers["set-cookie"].lower()
 
@@ -212,12 +217,12 @@ def test_canvas_and_simplefin_default_to_pinned_clients():
 
 
 # ---------------------------------------------------------------- secrets at rest
-def test_pkce_verifier_is_sealed_at_rest(app, conn, monkeypatch):
+def test_pkce_verifier_is_sealed_at_rest(client, conn, monkeypatch):
     from jarvis.integrations import service
     from jarvis.security.secrets import unseal
     _reload_settings(monkeypatch, google_client_id="cid", google_client_secret="csecret")
     conn.execute("BEGIN")
-    service.google_start(conn, "calendar")
+    service.google_start(conn, "usr_owner", "calendar")
     conn.execute("COMMIT")
     stored = conn.execute("SELECT code_verifier FROM oauth_states").fetchone()[0]
     assert stored.startswith("gAAAA")                       # Fernet token, not the verifier itself

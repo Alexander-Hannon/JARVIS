@@ -1,5 +1,86 @@
 # BUILD_STATUS
 
+## Session 11 update (2026-10-06): V5 M1a — people, roles, private-by-default data, MFA
+AJ's M1 decisions: data is **private by default** (admins see audit metadata only); M1 ships as three PRs (M1a identity
++ isolation + MFA, M1b SSO + SCIM, M1c Postgres); **per-user sandbox containers**. Plan:
+`~/.claude/plans/floating-gathering-liskov.md`.
+- **Identity:**
+  - One org per DB. New `users` (owner/admin/approver/member/auditor), `org_settings`, invites, `channel_links`.
+  - `security/principal.py` holds the `Principal` and the role → permission matrix (`PERMS`). Routes take
+    `require(perm)`.
+  - Sign-in is username + password. People join through single-use invite links (72 h), never temporary passwords.
+  - Throttles also count per username, and still admit devices that signed in as that user before.
+  - Accounts unused for 90 days are disabled at their next sign-in (owners are exempt).
+  - `jarvis reset-password --user X [--reset-mfa]` is the host-shell break-glass.
+- **Per-user isolation (the big diff):**
+  - Migration `0009` adds `user_id` to every per-user table and rebuilds the tables whose UNIQUE keys must include the
+    user (settings, plans, schedules, course mappings, projects, sandbox state). BEFORE INSERT/UPDATE triggers refuse a
+    NULL `user_id`.
+  - Every service takes `uid` explicitly. Foreign or unknown ids answer **404**.
+  - Documents can be shared with the org: readable and searchable by others, never writable by them.
+  - Agents, missions, briefings, notifications, Telegram (one paired chat per person) and the worker all act as the
+    owning user.
+- **Fixed real multi-user bugs:**
+  - Connecting an account no longer revokes another person's account for the same provider.
+  - A user can't take over an external account another person already holds (`AccountInUse`).
+- **Executor guards:**
+  - An approval not given by the proposal's owner is void.
+  - Writes go only through accounts that owner holds.
+  - Policy rules cover only their author's proposals.
+- **Settings:**
+  - Personal settings are per user. Models, brand, budget and MFA policy are org-level.
+  - Budget: org limits plus optional per-user caps.
+  - Prompts use each person's name, honorific and location; AJ's stay "AJ"/"sir".
+  - `JARVIS_EDITION=enterprise` hides personal connectors (Canvas, Spotify, SimpleFIN, Home Assistant, routing).
+- **MFA** (`security/mfa.py`):
+  - Methods: TOTP (RFC 6238, no step reuse), WebAuthn passkeys (py_webauthn), 10 hashed single-use recovery codes.
+  - `JARVIS_MFA_POLICY=auto` requires it for everyone in remote mode and for owner/admin/approver locally. A session
+    that owes a factor reaches only the enrollment routes.
+  - Admins can reset someone's second step.
+- **Separation of duties:**
+  - `co_approver_perm` (today `skill.install` → `org.integrations`) needs a second, different person. Enterprise
+    edition only, so a one-person install still works.
+  - Only owners grant or remove owner/admin. The last owner can't be demoted or disabled.
+  - Org activity view (`audit.read`) shows other people's events as kind-only, with no content.
+- **Sandbox:** each person gets their own container, volume, internal network and egress proxy (`names_for(uid)`). The
+  owner keeps the legacy `jarvis-sbx` names so AJ's existing container keeps working.
+- **UI:**
+  - Sign-in with a second step (code, passkey, recovery code); a forced-enrollment gate (QR code) when required.
+  - Settings → Account (name, password, second-step methods, recovery codes) and Settings → People (invite, role,
+    new link, reset 2-step, disable).
+  - Navigation, settings sections and admin cards are gated by role; auditors see Activity, Settings and Help.
+  - Co-approval queue on Actions; Share toggle on documents; Today greets the signed-in person.
+- **Docs:** `CLAUDE.md` boundaries (principals, 404 rule, approval ownership, MFA, per-user sandbox), API contract (auth,
+  MFA, people, co-approval, permission per route), threat model (user ↔ user boundary), NIST mapping (now 19 in place ·
+  41 partial · 15 planned · 35 customer-only; 3.1.1/2/7, 3.3.2, 3.5.3/4/6/9 moved to in place), DEPLOYMENT (MFA policy,
+  passkeys per host name, edition), new Help guide "People, roles and sign-in".
+- **Verification:**
+  - Backend: 395 passed (`-m "not slow"`); ruff clean. New: `test_v5_isolation.py` (signs in as B and enumerates every registered
+    route with A's ids: 404s, lists without A's markers), `test_v5_mfa.py`, `test_v5_roles.py`.
+  - Frontend: tsc + build pass; Playwright (mocked API) 26 passed (+6 in `accounts.spec.ts`).
+  - Migrations `0007`–`0010` on a **fresh copy of the real DB** (v6 → v10):
+    - Row counts are unchanged except the dropped `owner` singleton and the 9 stale OAuth states.
+    - Integrity ok, 0 FK violations.
+    - User `aj` (owner, same password hash). Todoist, Google and ICS accounts are AJ's; Anthropic is the org account
+      (the only NULL `user_id`). 3 schedules are AJ's; 10 approvals are `primary`.
+  - Live two-user smoke (`jarvis serve` in remote mode on a throwaway data dir, loopback): 28/28.
+    - Setup needs the console token. Both users are forced to enroll TOTP before any data route.
+    - The invite link works once.
+    - Memories, search and pin/forget are isolated (cross-user → 404).
+    - A member gets 403 on people, pause, diagnostics and role changes.
+    - Org activity is attributed and has no content.
+    - A second sign-in asks for the code. Disabling a person ends their session and blocks sign-in.
+  - **Not run:** the live Docker check of two users' sandboxes. Docker isn't reachable from this WSL distro; naming and
+    state are covered by fake-runtime tests.
+- **AJ after merge:**
+  - Sign in as **`aj`** with the current password. Existing devices stay signed in but stop at the set-up-your-
+    second-step screen. Once one device has enrolled, the others sign in again with the code (pair the phone anew).
+  - You're the owner and the install is in remote mode, so JARVIS asks you to set up an authenticator app or passkey
+    first.
+  - Save the 10 recovery codes.
+  - Passkeys are per host name: one made on the ts.net address won't work on localhost. An authenticator app works on
+    both.
+
 ## Session 10 update (2026-10-05): V5 kickoff — branch cleanup, roadmap, M0 security baseline
 - **Branches:** `feat/jarvis-v1-build` was fully merged into `main` (PRs #7–#11; file diff empty) and is deleted locally
   and on GitHub. Local `main` was fast-forwarded 34 commits. V5 work lives on `feat/v5-overseer`.

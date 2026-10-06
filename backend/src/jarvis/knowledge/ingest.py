@@ -540,14 +540,22 @@ def _build_processing(ex: _Extract, kind: str | None) -> tuple[str, dict]:
     return status, proc
 
 
-def _find_document(conn: sqlite3.Connection, origin: str, origin_ref: str | None, title: str,
+def _find_document(conn: sqlite3.Connection, uid: str, origin: str, origin_ref: str | None, title: str,
                    project_id: str | None) -> dict | None:
     if origin_ref:
-        return row(conn, "SELECT * FROM source_documents WHERE origin=? AND origin_ref=? AND deleted_at IS NULL "
-                         "ORDER BY created_at DESC LIMIT 1", (origin, origin_ref))
-    return row(conn, "SELECT * FROM source_documents WHERE origin=? AND origin_ref IS NULL AND title=? "
+        return row(conn, "SELECT * FROM source_documents WHERE user_id=? AND origin=? AND origin_ref=? "
+                         "AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1", (uid, origin, origin_ref))
+    return row(conn, "SELECT * FROM source_documents WHERE user_id=? AND origin=? AND origin_ref IS NULL AND title=? "
                      "AND project_id IS ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
-               (origin, title, project_id))
+               (uid, origin, title, project_id))
+
+
+# Readable = yours, or shared with the org by its owner. Writable (delete, share) = yours only.
+READABLE = "(d.user_id=? OR d.visibility='org')"
+
+
+def readable_document(conn: sqlite3.Connection, uid: str, document_id: str) -> dict | None:
+    return row(conn, f"SELECT d.* FROM source_documents d WHERE d.id=? AND {READABLE}", (document_id, uid))  # nosec B608 fixed clause
 
 
 def _result(doc: dict, ver: dict, deduped: bool, n_segments: int) -> dict:
@@ -556,12 +564,14 @@ def _result(doc: dict, ver: dict, deduped: bool, n_segments: int) -> dict:
             "deduped": deduped, "title": doc["title"], "segments": n_segments}
 
 
-def ingest_bytes(conn: sqlite3.Connection, data: bytes, filename: str, mime: str | None, project_id: str | None,
-                 origin: str = "upload", origin_ref: str | None = None) -> dict:
-    """Ingest one file. Same document identity + same hash as current version -> existing version returned."""
+def ingest_bytes(conn: sqlite3.Connection, uid: str, data: bytes, filename: str, mime: str | None,
+                 project_id: str | None, origin: str = "upload", origin_ref: str | None = None) -> dict:
+    """Ingest one file for `uid`. Same document identity + same hash as current version -> existing version returned."""
     title = (Path(filename or "").name or "untitled")[:255]
     sha = sha256_bytes(data)
-    existing = _find_document(conn, origin, origin_ref, title, project_id)
+    if project_id and not row(conn, "SELECT id FROM projects WHERE id=? AND user_id=?", (project_id, uid)):
+        raise KeyError(project_id)
+    existing = _find_document(conn, uid, origin, origin_ref, title, project_id)
     if existing and existing["current_version_id"]:
         cur = row(conn, "SELECT * FROM source_versions WHERE id=?", (existing["current_version_id"],))
         if cur and cur["sha256"] == sha:
@@ -608,9 +618,9 @@ def ingest_bytes(conn: sqlite3.Connection, data: bytes, filename: str, mime: str
         else:
             doc_id = new_id("doc")
             vnum = 1
-            conn.execute("INSERT INTO source_documents (id, project_id, origin, origin_ref, title, mime, created_at) "
-                         "VALUES (?,?,?,?,?,?,?)",
-                         (doc_id, project_id, origin, origin_ref, title,
+            conn.execute("INSERT INTO source_documents (id, user_id, project_id, origin, origin_ref, title, mime, "
+                         "created_at) VALUES (?,?,?,?,?,?,?,?)",
+                         (doc_id, uid, project_id, origin, origin_ref, title,
                           mime or _KIND_MIME.get(kind or "") or (f"image/{kind}" if kind == "image" else None), now))
         ver_id = new_id("ver")
         conn.execute("INSERT INTO source_versions (id, document_id, version, sha256, bytes, stored_path, fetched_at, "
@@ -628,14 +638,14 @@ def ingest_bytes(conn: sqlite3.Connection, data: bytes, filename: str, mime: str
         if status != "failed" or not (existing and existing["current_version_id"]):
             conn.execute("UPDATE source_documents SET current_version_id=? WHERE id=?", (ver_id, doc_id))
         audit(conn, "system", "knowledge.ingest", f"Ingested document version {vnum} ({status})", "source_document",
-              doc_id, {"version_id": ver_id, "sha256": sha, "bytes": len(data), "status": status, "type": kind})
+              doc_id, {"version_id": ver_id, "sha256": sha, "bytes": len(data), "status": status, "type": kind}, uid=uid)
     doc = row(conn, "SELECT * FROM source_documents WHERE id=?", (doc_id,))
     ver = row(conn, "SELECT * FROM source_versions WHERE id=?", (ver_id,))
     return _result(doc, ver, False, len(ex.segments))
 
 
-def document_status(conn: sqlite3.Connection, document_id: str) -> dict | None:
-    doc = row(conn, "SELECT * FROM source_documents WHERE id=?", (document_id,))
+def document_status(conn: sqlite3.Connection, uid: str, document_id: str) -> dict | None:
+    doc = readable_document(conn, uid, document_id)
     if not doc:
         return None
     vers = rows(conn, "SELECT id, version, sha256, bytes, status, processing, fetched_at FROM source_versions "
@@ -645,9 +655,9 @@ def document_status(conn: sqlite3.Connection, document_id: str) -> dict | None:
     return {**doc, "versions": vers}
 
 
-def delete_document(conn: sqlite3.Connection, document_id: str) -> dict:
+def delete_document(conn: sqlite3.Connection, uid: str, document_id: str) -> dict:
     """Forget a document: remove segments + FTS rows, mark deleted, remove unreferenced stored files."""
-    doc = row(conn, "SELECT * FROM source_documents WHERE id=?", (document_id,))
+    doc = row(conn, "SELECT * FROM source_documents WHERE id=? AND user_id=?", (document_id, uid))
     if not doc:
         return {"deleted": False, "reason": "not found"}
     vers = rows(conn, "SELECT id, stored_path FROM source_versions WHERE document_id=?", (document_id,))
@@ -663,7 +673,7 @@ def delete_document(conn: sqlite3.Connection, document_id: str) -> dict:
         conn.execute("UPDATE source_versions SET stored_path=NULL WHERE document_id=?", (document_id,))
         conn.execute("UPDATE source_documents SET deleted_at=? WHERE id=?", (now_iso(), document_id))
         audit(conn, "user", "knowledge.delete", "Deleted document and its evidence", "source_document", document_id,
-              {"segments": len(segs), "versions": len(vers)})
+              {"segments": len(segs), "versions": len(vers)}, uid=uid)
     removed = 0
     for rel in originals:
         if not row(conn, "SELECT 1 x FROM source_versions WHERE stored_path=? LIMIT 1", (rel,)):
@@ -680,3 +690,16 @@ def _unlink(rel: str) -> int:
         return 1
     except FileNotFoundError:
         return 0
+
+
+def set_visibility(conn: sqlite3.Connection, uid: str, document_id: str, visibility: str) -> dict:
+    """Share a document with the whole org (read-only for others) or make it private again. Owner only."""
+    if visibility not in ("private", "org"):
+        raise ValueError(visibility)
+    n = conn.execute("UPDATE source_documents SET visibility=? WHERE id=? AND user_id=? AND deleted_at IS NULL",
+                     (visibility, document_id, uid)).rowcount
+    if not n:
+        raise KeyError(document_id)
+    audit(conn, "user", "knowledge.visibility", f"Document {'shared with the organization' if visibility == 'org' else 'made private'}",
+          "source_document", document_id, uid=uid)
+    return {"document_id": document_id, "visibility": visibility}

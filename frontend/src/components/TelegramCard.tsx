@@ -2,9 +2,11 @@ import { useState } from 'react';
 import { api } from '../api/client';
 import { useAsync } from '../lib/hooks';
 import { Async, Badge, Card, ErrorBox, SecretForm, Toggle } from './ui';
+import { useAuth } from '../state/auth';
 
 /* Talk to JARVIS from Telegram. The bot answers only the one chat you pair with a code from here. */
 export function TelegramCard() {
+  const { can } = useAuth();
   const st = useAsync(() => api.telegram(), []);
   const [pair, setPair] = useState<{ code: string; instructions: string } | null>(null);
   const [err, setErr] = useState<unknown>(null);
@@ -31,7 +33,11 @@ export function TelegramCard() {
                 <li>In Telegram, message @BotFather → /newbot → copy the token.</li>
                 <li>Paste it here, then pair your chat with a one-time code.</li>
               </ol>
-              <SecretForm label="Bot token" placeholder="123456:ABC…" submitLabel="Connect bot" onSubmit={(v) => run(() => api.connectTelegram(v))} />
+              {can('org.integrations') ? (
+                <SecretForm label="Bot token" placeholder="123456:ABC…" submitLabel="Connect bot" onSubmit={(v) => run(() => api.connectTelegram(v))} />
+              ) : (
+                <p className="hint">Your admin connects the organization's bot; then you can pair your own chat here.</p>
+              )}
             </>
           ) : (
             <div className="stack">

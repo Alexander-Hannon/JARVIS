@@ -24,7 +24,7 @@ def guides() -> list[dict]:
     return out
 
 
-def reference(conn) -> dict:
+def reference(conn, uid: str) -> dict:
     from jarvis.actions import policy
     from jarvis.agents import tools as T
     from jarvis.integrations import connectors as C
@@ -34,7 +34,7 @@ def reference(conn) -> dict:
     return {"capabilities": [{"family": f, "label": FAMILY_LABEL.get(f, f), "tools": sorted(v, key=lambda x: x["name"])}
                              for f, v in sorted(fams.items(), key=lambda kv: FAMILY_LABEL.get(kv[0], kv[0]))],
             "actions": policy.catalog(),
-            "connectors": [{k: c[k] for k in ("id", "name", "summary", "reads", "writes", "status")} for c in C.catalog(conn)]}
+            "connectors": [{k: c[k] for k in ("id", "name", "summary", "reads", "writes", "status")} for c in C.catalog(conn, uid)]}
 
 
 def _chunks() -> list[dict]:
@@ -49,12 +49,12 @@ def _chunks() -> list[dict]:
 STOP = {"how", "the", "and", "can", "you", "what", "does", "for", "with", "jarvis", "this", "that", "into", "get", "use"}
 
 
-def search(conn, query: str, limit: int = 5) -> list[dict]:
+def search(conn, uid: str, query: str, limit: int = 5) -> list[dict]:
     terms = {w for w in re.findall(r"[a-z0-9]+", query.lower()) if len(w) > 2 and w not in STOP}
     if not terms:
         return []
     corpus = _chunks()
-    for fam in reference(conn)["capabilities"]:
+    for fam in reference(conn, uid)["capabilities"]:
         for t in fam["tools"]:
             corpus.append({"guide": f"Capabilities: {fam['label']}", "id": "reference",
                            "text": f"{t['name']}: {t['what']} Example: {t['example']}"})

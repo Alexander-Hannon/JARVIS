@@ -54,4 +54,4 @@ def test_removing_root_forgets_its_notes(client, conn, tmp_path):
     assert _search(client, "tutoring")
     client.delete(f"/api/localops/roots/{root['id']}")
     assert not _search(client, "tutoring")
-    assert client.post(f"/api/vault/roots/{root['id']}/reindex").status_code == 409
+    assert client.post(f"/api/vault/roots/{root['id']}/reindex").status_code == 404

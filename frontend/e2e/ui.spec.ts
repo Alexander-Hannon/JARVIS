@@ -56,6 +56,7 @@ test.describe('UI (mocked API)', () => {
     await page.goto('/');
     await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Pair with a code instead' })).toBeVisible();
+    await page.getByTestId('username').fill('aj');
     await page.getByTestId('password').fill('wrong');
     await page.getByRole('button', { name: 'Sign in' }).click();
     await expect(page.getByRole('alert')).toContainText('Invalid password');

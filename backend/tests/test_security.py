@@ -20,17 +20,17 @@ def test_all_data_endpoints_require_auth(app):
 def test_setup_only_once_and_only_loopback(app):
     c = TestClient(app, client=("203.0.113.9", 5555))
     assert c.get("/api/auth/status").json()["setup_allowed"] is False
-    assert c.post("/api/auth/setup", json={"password": "x" * 12}).status_code == 403
+    assert c.post("/api/auth/setup", json={"username": "aj", "password": "x" * 12}).status_code == 403
     local = TestClient(app, client=("127.0.0.1", 5000))
-    assert local.post("/api/auth/setup", json={"password": "short"}).status_code == 400
-    assert local.post("/api/auth/setup", json={"password": "long enough pw"}).status_code == 200
-    assert local.post("/api/auth/setup", json={"password": "another long pw"}).status_code in (403, 409)
+    assert local.post("/api/auth/setup", json={"username": "aj", "password": "short"}).status_code == 400
+    assert local.post("/api/auth/setup", json={"username": "aj", "password": "long enough pw"}).status_code == 200
+    assert local.post("/api/auth/setup", json={"username": "aj", "password": "another long pw"}).status_code in (403, 409)
 
 
 def test_login_and_wrong_password(client):
     c = TestClient(client.c.app)
-    assert c.post("/api/auth/login", json={"password": "wrong password!"}).status_code == 401
-    assert c.post("/api/auth/login", json={"password": "correct horse battery"}).status_code == 200
+    assert c.post("/api/auth/login", json={"username": "aj", "password": "wrong password!"}).status_code == 401
+    assert c.post("/api/auth/login", json={"username": "aj", "password": "correct horse battery"}).status_code == 200
 
 
 def test_csrf_required_for_cookie_writes(client):
@@ -60,8 +60,8 @@ def test_secrets_never_leak_to_api_logs_or_backups(client, conn, env, caplog):
     token = "tdst_SUPERSECRET_1234567890abcdef"
     feed = "https://canvas.example.edu/feeds/calendars/user_PRIVATEFEEDTOKEN.ics"
     conn.execute("BEGIN")
-    A.upsert_account(conn, "todoist", "me", token, "api_token", external_account_id="u9")
-    A.upsert_account(conn, "ics", "Deadline feed", feed, "ics_url", external_account_id="ics-feed")
+    A.upsert_account(conn, "usr_owner", "todoist", "me", token, "api_token", external_account_id="u9")
+    A.upsert_account(conn, "usr_owner", "ics", "Deadline feed", feed, "ics_url", external_account_id="ics-feed")
     conn.execute("COMMIT")
     blob = ""
     for path in ["/api/integrations", "/api/doctor", "/api/settings", "/api/activity", "/api/budget"]:
@@ -85,7 +85,7 @@ def test_missing_encryption_key_fails_loudly(client, conn, env):
     from jarvis.integrations import accounts as A
     from jarvis.security import secrets
     conn.execute("BEGIN")
-    aid = A.upsert_account(conn, "github", "gh", "ghp_x", "pat", external_account_id="github")
+    aid = A.upsert_account(conn, "usr_owner", "github", "gh", "ghp_x", "pat", external_account_id="github")
     conn.execute("COMMIT")
     (env / "data" / "secret.key").rename(env / "data" / "moved.key")
     with pytest.raises(secrets.SecretKeyUnavailable):
@@ -119,12 +119,12 @@ def test_revise_cannot_change_destination_or_account(client, fakes):
     assert bad.status_code == 400
 
 
-def test_unsupported_action_types_cannot_be_proposed(conn):
+def test_unsupported_action_types_cannot_be_proposed(client, conn):
     from jarvis.actions import proposals as P
     with pytest.raises(P.ProposalError):
         conn.execute("BEGIN")
         try:
-            P.create(conn, "x", [P.ActionSpec("email.send", {"to": "a@b"}, "UTC", "send mail")], "x", conversation_id=None)
+            P.create(conn, "usr_owner", "x", [P.ActionSpec("email.send", {"to": "a@b"}, "UTC", "send mail")], "x", conversation_id=None)
         finally:
             conn.execute("ROLLBACK")
 

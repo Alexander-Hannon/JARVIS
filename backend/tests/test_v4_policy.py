@@ -91,11 +91,11 @@ def test_origin_scoping_and_pause(client, fakes, conn):
     rule(client)
     p = cmd(client, TWO_TASKS)["proposal"]
     client.post(f"/api/proposals/{p['id']}/reject")
-    specs = P.specs_from_actions(P.actions_for_version(conn, P.current_version(conn, p["id"])["pv"]["id"]))
-    mission_pid = P.create(conn, "from a mission", specs, "x", conversation_id=None, origin="mission")
+    specs = P.specs_from_actions(P.actions_for_version(conn, P.current_version(conn, "usr_owner", p["id"])["pv"]["id"]))
+    mission_pid = P.create(conn, "usr_owner", "from a mission", specs, "x", conversation_id=None, origin="mission")
     assert policy.try_auto_approve(conn, mission_pid) is None        # rule only granted for AJ's own commands
     client.post("/api/control/pause", {"reason": "test"})
-    cmd_pid = P.create(conn, "while paused", specs, "x", conversation_id=None)
+    cmd_pid = P.create(conn, "usr_owner", "while paused", specs, "x", conversation_id=None)
     assert policy.try_auto_approve(conn, cmd_pid) is None
 
 
@@ -125,7 +125,7 @@ def test_deferred_tools_bring_tool_search(conn):
     T.REGISTRY["zz_deferred_probe"] = T.Tool("zz_deferred_probe", "probe", T.obj({}), lambda run: {}, "read", "chief",
                                              deferred=True)
     try:
-        sch = T.schemas(conn)
+        sch = T.schemas(conn, "usr_owner")
         assert sch[0]["type"] == "tool_search_tool_bm25_20251119"
         assert next(s for s in sch if s.get("name") == "zz_deferred_probe")["defer_loading"] is True
     finally:

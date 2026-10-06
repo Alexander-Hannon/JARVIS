@@ -13,11 +13,11 @@ def _loader(name: str):
         copied = []
         if s["files"]:
             from jarvis.agents.tools.sandbox import sandbox_available
-            if sandbox_available(run.conn):
+            if sandbox_available(run.conn, run.uid):
                 from jarvis.sandbox import service as SB
                 try:
                     for rel, text in s["files"].items():
-                        SB.write_file(run.conn, run.run_id, f".skills/{name}/{rel}", text)
+                        SB.write_file(run.conn, run.uid, run.run_id, f".skills/{name}/{rel}", text)
                         copied.append(f"/workspace/.skills/{name}/{rel}")
                 except SB.SandboxError:
                     copied = []
@@ -28,10 +28,10 @@ def _loader(name: str):
     return handler
 
 
-def tools(conn) -> list[Tool]:
+def tools(conn, uid: str) -> list[Tool]:
     return [Tool(f"skill__{s['name'].replace('-', '_')}", f"[Skill] {s['description']}", obj({}), _loader(s["name"]), "read",
                  "skills", manual=s["description"], deferred=True)
-            for s in SK.list_skills(conn) if s["enabled"]]
+            for s in SK.list_skills(conn, uid) if s["enabled"]]
 
 
 @tool("propose_skill",

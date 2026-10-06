@@ -20,7 +20,7 @@ from jarvis.core.util import iso, now_iso, parse_iso, utcnow
 from jarvis.integrations import accounts as A
 from jarvis.integrations.base import ProviderError
 from jarvis.security.secrets import seal, unseal
-from jarvis.integrations.service import SetupError, integration_view, redirect_uri
+from jarvis.integrations.service import SetupError, _upsert, integration_view, redirect_uri
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,7 @@ class Resource:
     type: str                     # scope_grants.resource_type
     label: str                    # "Pages JARVIS may write under"
     access: tuple[str, ...]       # ("write",) or ("read", "write")
-    lister: Callable              # lister(conn) -> [{id, name, detail?}]
+    lister: Callable              # lister(conn, uid) -> [{id, name, detail?}]
 
 
 @dataclass(frozen=True)
@@ -59,7 +59,7 @@ def _bad(kind: str, vendor: str, e: ProviderError) -> SetupError:
     return SetupError(e.kind, f"{vendor} rejected the {kind} ({e.kind}).")
 
 
-def _connect_notion(conn, v: dict) -> str:
+def _connect_notion(conn, uid: str, v: dict) -> str:
     from jarvis.integrations.notion import NotionAdapter
     tok = (v.get("token") or "").strip()
     if len(tok) < 20:
@@ -68,11 +68,11 @@ def _connect_notion(conn, v: dict) -> str:
         me = NotionAdapter(tok).whoami()
     except ProviderError as e:
         raise _bad("secret", "Notion", e) from None
-    return A.upsert_account(conn, "notion", me.get("workspace") or me["name"], tok, "api_token",
+    return _upsert(conn, uid, "notion", me.get("workspace") or me["name"], tok, "api_token",
                             external_account_id=me["id"], scopes=["pages shared with the integration"])
 
 
-def _connect_slack(conn, v: dict) -> str:
+def _connect_slack(conn, uid: str, v: dict) -> str:
     from jarvis.integrations.slack import USER_SCOPES, SlackAdapter
     tok = (v.get("token") or "").strip()
     if not tok.startswith("xoxp-"):
@@ -81,7 +81,7 @@ def _connect_slack(conn, v: dict) -> str:
         me = SlackAdapter(tok).whoami()
     except ProviderError as e:
         raise _bad("token", "Slack", e) from None
-    aid = A.upsert_account(conn, "slack", f"{me.get('user')} @ {me.get('team')}", tok, "user_token",
+    aid = _upsert(conn, uid, "slack", f"{me.get('user')} @ {me.get('team')}", tok, "user_token",
                            external_account_id=f"{me.get('team')}:{me.get('user_id')}", scopes=USER_SCOPES,
                            config={"user_id": me.get("user_id")})
     # Posting into AJ's own DM is always allowed (it reaches nobody else); other channels need explicit grants.
@@ -89,7 +89,7 @@ def _connect_slack(conn, v: dict) -> str:
     return aid
 
 
-def _connect_canvas(conn, v: dict) -> str:
+def _connect_canvas(conn, uid: str, v: dict) -> str:
     from jarvis.integrations.canvas import CanvasAdapter
     from jarvis.security.netguard import UnsafeURL, validate_url
     base, tok = (v.get("base_url") or "").strip().rstrip("/"), (v.get("token") or "").strip()
@@ -101,11 +101,11 @@ def _connect_canvas(conn, v: dict) -> str:
         me = CanvasAdapter(base, tok).whoami()
     except ProviderError as e:
         raise _bad("token", "Canvas", e) from None
-    return A.upsert_account(conn, "canvas", f"{me.get('name')} ({base.split('//')[1]})", tok, "api_token",
+    return _upsert(conn, uid, "canvas", f"{me.get('name')} ({base.split('//')[1]})", tok, "api_token",
                             external_account_id=f"{base}:{me.get('id')}", scopes=["read-only"], config={"base_url": base})
 
 
-def _connect_ha(conn, v: dict) -> str:
+def _connect_ha(conn, uid: str, v: dict) -> str:
     from jarvis.integrations.homeassistant import HomeAssistantAdapter, UnsafeHAURL, validate_base_url
     try:
         base = validate_base_url(v.get("base_url") or "")
@@ -116,21 +116,21 @@ def _connect_ha(conn, v: dict) -> str:
         HomeAssistantAdapter(base, tok).ping()
     except ProviderError as e:
         raise _bad("token", "Home Assistant", e) from None
-    return A.upsert_account(conn, "homeassistant", f"Home Assistant ({base.split('//')[1]})", tok, "api_token",
+    return _upsert(conn, uid, "homeassistant", f"Home Assistant ({base.split('//')[1]})", tok, "api_token",
                             external_account_id=base, scopes=["allowlisted entities only"], config={"base_url": base})
 
 
-def _connect_routing(conn, v: dict) -> str:
+def _connect_routing(conn, uid: str, v: dict) -> str:
     from jarvis.integrations.routing import RoutingAdapter
     key = (v.get("api_key") or "").strip()
     try:
         RoutingAdapter(key).geocode("Huntsville, AL")
     except ProviderError as e:
         raise _bad("key", "OpenRouteService", e) from None
-    return A.upsert_account(conn, "routing", "OpenRouteService", key, "api_key", external_account_id="ors", scopes=["read"])
+    return _upsert(conn, uid, "routing", "OpenRouteService", key, "api_key", external_account_id=f"ors:{uid}", scopes=["read"])
 
 
-def _connect_simplefin(conn, v: dict) -> str:
+def _connect_simplefin(conn, uid: str, v: dict) -> str:
     from jarvis.integrations.simplefin import SetupTokenError, SimpleFinAdapter, claim, claim_url_from_token
     try:
         access = claim(claim_url_from_token(v.get("setup_token") or ""))
@@ -139,24 +139,24 @@ def _connect_simplefin(conn, v: dict) -> str:
         raise SetupError("bad_token", str(e)) from None
     except ProviderError as e:
         raise _bad("access", "SimpleFIN", e) from None
-    return A.upsert_account(conn, "simplefin", "Bank accounts (SimpleFIN, read-only)", access, "access_url",
-                            external_account_id="simplefin", scopes=["read-only"])
+    return _upsert(conn, uid, "simplefin", "Bank accounts (SimpleFIN, read-only)", access, "access_url",
+                            external_account_id=f"simplefin:{uid}", scopes=["read-only"])
 
 
 # ------------------------------------------------------------------------------------------------ resource listers
-def _notion_pages(conn) -> list[dict]:
-    return [{"id": p["id"], "name": p["title"], "detail": p.get("url")} for p in A.app_provider(conn, "notion").search("", 50)]
+def _notion_pages(conn, uid: str) -> list[dict]:
+    return [{"id": p["id"], "name": p["title"], "detail": p.get("url")} for p in A.app_provider(conn, uid, "notion").search("", 50)]
 
 
-def _slack_channels(conn) -> list[dict]:
+def _slack_channels(conn, uid: str) -> list[dict]:
     return [{"id": c["id"], "name": ("#" if not c["is_im"] else "") + c["name"], "detail": "private" if c["is_private"] else ""}
-            for c in A.app_provider(conn, "slack").channels() if not c["is_im"]]
+            for c in A.app_provider(conn, uid, "slack").channels() if not c["is_im"]]
 
 
-def _ha_entities(conn) -> list[dict]:
+def _ha_entities(conn, uid: str) -> list[dict]:
     from jarvis.integrations.homeassistant import is_secure
     return [{"id": s["entity_id"], "name": s["name"], "detail": ("always asks" if is_secure(s["entity_id"]) else s["state"])}
-            for s in A.app_provider(conn, "homeassistant").states()]
+            for s in A.app_provider(conn, uid, "homeassistant").states()]
 
 
 CATALOG: dict[str, Connector] = {c.id: c for c in (
@@ -209,11 +209,18 @@ CATALOG: dict[str, Connector] = {c.id: c for c in (
 )}
 # Connectors whose connect handler is a plain token form (Spotify uses OAuth instead).
 _CONNECT = {"canvas": _connect_canvas}
+# Consumer connectors only offered by the personal edition (a company install doesn't connect employees' bank
+# accounts, music or home devices).
+PERSONAL_ONLY = frozenset({"canvas", "spotify", "homeassistant", "routing", "simplefin"})
 
 
-def view(conn, c: Connector) -> dict:
-    acct = A.get_account(conn, c.id)
-    simulated = c.id in A._overrides
+def offered(cid: str) -> bool:
+    return get_settings().edition == "personal" or cid not in PERSONAL_ONLY
+
+
+def view(conn, uid: str, c: Connector) -> dict:
+    acct = A.get_account(conn, uid, c.id)
+    simulated = A._override(uid, c.id) is not None
     status = acct["status"] if acct else ("connected" if simulated else "not_connected")
     out = {"id": c.id, "name": c.name, "family": c.family, "auth": c.auth, "summary": c.summary, "reads": list(c.reads),
            "writes": list(c.writes), "fields": [f.__dict__ for f in c.fields], "steps": list(c.steps), "status": status,
@@ -226,40 +233,47 @@ def view(conn, c: Connector) -> dict:
     return out
 
 
-def catalog(conn) -> list[dict]:
-    return [view(conn, c) for c in CATALOG.values()]
+def catalog(conn, uid: str) -> list[dict]:
+    return [view(conn, uid, c) for c in CATALOG.values() if offered(c.id)]
 
 
-def connect(conn, cid: str, values: dict) -> dict:
+def _get(cid: str) -> Connector:
     c = CATALOG.get(cid)
-    fn = (c.connect if c else None) or _CONNECT.get(cid)
-    if not c or not fn:
+    if not c or not offered(cid):
+        raise SetupError("unknown_connector", "That connector isn't available on this install.")
+    return c
+
+
+def connect(conn, uid: str, cid: str, values: dict) -> dict:
+    c = _get(cid)
+    fn = c.connect or _CONNECT.get(cid)
+    if not fn:
         raise SetupError("unknown_connector", "That connector can't be connected with a token form.")
     with tx(conn):
-        fn(conn, values)
-    return view(conn, c)
+        fn(conn, uid, values)
+    return view(conn, uid, c)
 
 
-def resources(conn, cid: str) -> dict:
-    c = CATALOG[cid]
+def resources(conn, uid: str, cid: str) -> dict:
+    c = _get(cid)
     if not c.resource:
         raise SetupError("no_resources", "This connector has no resource picker.")
-    acct = A.get_account(conn, cid)
-    if not acct and cid not in A._overrides:
+    acct = A.get_account(conn, uid, cid)
+    if not acct and A._override(uid, cid) is None:
         raise SetupError("not_connected", f"Connect {c.name} first.")
-    items = c.resource.lister(conn)
+    items = c.resource.lister(conn, uid)
     granted = {acc: {g["resource_id"] for g in A.grants(conn, acct["id"], c.resource.type, acc)} if acct else set()
                for acc in c.resource.access}
     return {"type": c.resource.type, "label": c.resource.label, "access": list(c.resource.access),
             "items": [i | {acc: i["id"] in granted[acc] for acc in c.resource.access} for i in items]}
 
 
-def set_resources(conn, cid: str, chosen: dict[str, list[str]]) -> dict:
-    c = CATALOG[cid]
-    acct = A.get_account(conn, cid)
+def set_resources(conn, uid: str, cid: str, chosen: dict[str, list[str]]) -> dict:
+    c = _get(cid)
+    acct = A.get_account(conn, uid, cid)
     if not c.resource or not acct:
         raise SetupError("not_connected", f"Connect {c.name} first.")
-    names = {i["id"]: i["name"] for i in c.resource.lister(conn)}
+    names = {i["id"]: i["name"] for i in c.resource.lister(conn, uid)}
     with tx(conn):
         for acc in c.resource.access:
             ids = chosen.get(acc) or []
@@ -269,7 +283,7 @@ def set_resources(conn, cid: str, chosen: dict[str, list[str]]) -> dict:
             if acc == "write" and "read" in c.resource.access:
                 ids = [i for i in ids if i in set(chosen.get("read") or [])]   # can't control what JARVIS can't see
             A.set_grants(conn, acct["id"], c.resource.type, acc, [(i, names[i]) for i in ids])
-    return resources(conn, cid)
+    return resources(conn, uid, cid)
 
 
 # ------------------------------------------------------------------------------------------------ Spotify OAuth (PKCE)
@@ -278,7 +292,7 @@ def spotify_redirect_uri() -> str:
     return redirect_uri().replace("://localhost", "://127.0.0.1").replace("/google/callback", "/spotify/callback")
 
 
-def spotify_start(conn) -> tuple[str, str]:
+def spotify_start(conn, uid: str) -> tuple[str, str]:
     from jarvis.integrations.google_oauth import generate_pkce_pair
     from jarvis.integrations.spotify import build_auth_url
     s = get_settings()
@@ -288,9 +302,9 @@ def spotify_start(conn) -> tuple[str, str]:
     verifier, challenge = generate_pkce_pair()
     ru = spotify_redirect_uri()
     conn.execute("INSERT INTO oauth_states (state_hash, provider, purpose, code_verifier, redirect_uri, created_at, expires_at, "
-                 "binding_hash) VALUES (?,?,?,?,?,?,?,?)",
+                 "binding_hash, user_id) VALUES (?,?,?,?,?,?,?,?,?)",
                  (hashlib.sha256(state.encode()).hexdigest(), "spotify", "playback", seal(verifier), ru, now_iso(),
-                  iso(utcnow() + timedelta(minutes=10)), hashlib.sha256(binding.encode()).hexdigest()))
+                  iso(utcnow() + timedelta(minutes=10)), hashlib.sha256(binding.encode()).hexdigest(), uid))
     return build_auth_url(s.spotify_client_id, ru, state, challenge), binding
 
 
@@ -313,6 +327,7 @@ def spotify_callback(conn, state: str, code: str | None, error: str | None, bind
         me = SpotifyAdapter(SpotifyCredentials(tokens, s.spotify_client_id)).whoami()
     except ProviderError as e:
         raise SetupError("token_exchange_failed", f"Spotify token exchange failed ({e.kind}).") from None
-    aid = A.upsert_account(conn, "spotify", me.get("name") or "Spotify", json.dumps(tokens), "oauth_tokens",
+    uid = st["user_id"]
+    aid = _upsert(conn, uid, "spotify", me.get("name") or "Spotify", json.dumps(tokens), "oauth_tokens",
                            external_account_id=me.get("id"), scopes=SCOPES, config={"product": me.get("product")})
     return integration_view(conn, aid)

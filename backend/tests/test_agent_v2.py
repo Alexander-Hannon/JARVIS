@@ -86,7 +86,7 @@ def test_model_cannot_invent_dates(client, fakes):
     r = cmd(client, "remind me to buy stamps")
     assert r["proposal"] is None
     res = llm.requests[1]["messages"][-1]["content"][0]["content"]
-    assert "is not something AJ said" in res
+    assert "is not something the user said" in res
 
 
 def test_research_question_uses_web_and_creates_no_task(client, fakes):

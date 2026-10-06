@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConversation } from '../state/app';
-import { NAV } from './Layout';
+import { useNav } from './Layout';
 
 /* Ctrl/⌘-K: jump anywhere, or send what you typed straight to JARVIS. */
 export function CommandPalette() {
@@ -9,6 +9,7 @@ export function CommandPalette() {
   const [text, setText] = useState('');
   const [sel, setSel] = useState(0);
   const nav = useNavigate();
+  const allowed = useNav();
   const { send } = useConversation();
   const input = useRef<HTMLInputElement>(null);
 
@@ -32,7 +33,7 @@ export function CommandPalette() {
 
   const items = useMemo(() => {
     const t = text.trim().toLowerCase();
-    const pages = NAV.filter((n) => !t || n.label.toLowerCase().includes(t)).map((n) => ({
+    const pages = allowed.filter((n) => !t || n.label.toLowerCase().includes(t)).map((n) => ({
       key: n.to,
       label: `Go to ${n.label}`,
       run: () => nav(n.to),
@@ -41,7 +42,7 @@ export function CommandPalette() {
       ? [{ key: 'ask', label: `Ask: “${text.trim()}”`, run: () => { nav('/console'); void send({ text: text.trim(), channel: 'typed', captured_at: new Date().toISOString(), speech_playing: false }); } }]
       : [];
     return [...ask, ...pages];
-  }, [text, nav, send]);
+  }, [text, nav, send, allowed]);
 
   if (!open) {
     return (

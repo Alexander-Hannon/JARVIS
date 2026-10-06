@@ -1690,3 +1690,32 @@ input[type='range'] {
     scroll-behavior: auto !important;
   }
 }
+
+/* ---- V5 accounts: second factor, recovery codes, invites, co-approval ---- */
+.auth-card.wide { max-width: 560px; }
+.mfa-enroll { display: flex; flex-direction: column; gap: 18px; margin: 8px 0; }
+.mfa-enroll section { display: flex; flex-direction: column; gap: 8px; }
+.mfa-enroll .row input { flex: 1; min-width: 0; }
+.totp-confirm { display: flex; flex-direction: column; gap: 10px; }
+.qr { width: 184px; height: 184px; padding: 8px; background: #fff; border-radius: var(--radius-sm); }
+.qr svg { width: 100%; height: 100%; display: block; }
+.secret-key { overflow-wrap: anywhere; letter-spacing: 0.08em; }
+.recovery-codes {
+  display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; margin: 10px 0;
+  background: var(--surface-2); border: 1px dashed var(--accent); border-radius: var(--radius-sm);
+}
+.recovery-codes ol { columns: 2; margin: 0; padding-left: 1.4em; }
+.recovery-codes code { letter-spacing: 0.06em; }
+.invite-link {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 10px 12px;
+  background: var(--surface-2); border-radius: var(--radius-sm);
+}
+.invite-link code { overflow-wrap: anywhere; flex: 1 1 260px; }
+.co-approvals .co-item { padding: 10px 0; border-top: 1px solid var(--line, rgba(255, 255, 255, 0.08)); }
+.co-approvals .co-item:first-of-type { border-top: 0; }
+.co-approvals pre { white-space: pre-wrap; max-height: 12em; overflow: auto; }
+.field.grow, .grow { flex: 1 1 auto; min-width: 0; }
+@media (max-width: 520px) {
+  .recovery-codes ol { columns: 1; }
+  .qr { width: 160px; height: 160px; }
+}

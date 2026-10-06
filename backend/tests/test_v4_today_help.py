@@ -9,7 +9,8 @@ from jarvis.llm.provider import ScriptedLLM, set_provider
 
 def test_manual_is_generated_from_registries(client):
     m = client.get("/api/manual").json()
-    assert m["assistant_name"] == "JARVIS" and len(m["guides"]) == 8
+    assert m["assistant_name"] == "JARVIS" and len(m["guides"]) == 9
+    assert "accounts" in {g["id"] for g in m["guides"]}
     caps = {c["family"]: c for c in m["reference"]["capabilities"]}
     email = {t["name"]: t for t in caps["email"]["tools"]}
     assert email["propose_email_draft"]["risk"] == "Asks before changing anything" and email["check_inbox"]["example"]
@@ -23,6 +24,8 @@ def test_manual_is_generated_from_registries(client):
 def test_manual_search_and_agent_tool(client):
     hits = client.get("/api/manual/search", params={"q": "how do I connect slack"}).json()
     assert hits and hits[0]["guide"] == "Connections"
+    hits = client.get("/api/manual/search", params={"q": "lost my phone recovery codes"}).json()
+    assert hits and hits[0]["guide"] == "People, roles and sign-in"
     llm = ScriptedLLM([{"content": [{"type": "tool_use", "id": "t1", "name": "search_manual",
                                      "input": {"query": "let JARVIS add tasks without asking"}}], "stop_reason": "tool_use"},
                        {"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}])

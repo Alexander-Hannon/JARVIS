@@ -44,7 +44,7 @@ def mail(conn, fakes):
     fm = FakeMail("gmail")
     A.set_override("gmail", fm)
     conn.execute("BEGIN")
-    A.upsert_account(conn, "gmail", "aj@example.test (SIMULATED)", None, None, external_account_id="aj@example.test",
+    A.upsert_account(conn, "usr_owner", "gmail", "aj@example.test (SIMULATED)", None, None, external_account_id="aj@example.test",
                      config={"purposes": ["mail"]})
     conn.execute("COMMIT")
     fm.external_receive(PROF, "Grades for IS 640", "Hi AJ, can you send me the midterm grades by Friday? Thanks.",

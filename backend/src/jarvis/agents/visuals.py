@@ -8,11 +8,11 @@ from zoneinfo import ZoneInfo
 from jarvis.agents import context as ctx
 
 
-def calendar(conn, start: date, days: int, tz: str, cal: dict | None = None) -> dict:
+def calendar(conn, uid: str, start: date, days: int, tz: str, cal: dict | None = None) -> dict:
     days = max(1, min(days, 7))
     s, _ = ctx.day_bounds(start, tz)
     _, e = ctx.day_bounds(start + timedelta(days=days - 1), tz)
-    cal = cal or ctx.events_between(conn, s, e)
+    cal = cal or ctx.events_between(conn, uid, s, e)
     zi = ZoneInfo(tz)
     out_days = []
     for i in range(days):

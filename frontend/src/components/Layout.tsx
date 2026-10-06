@@ -4,6 +4,15 @@ import { NavLink, Link } from 'react-router-dom';
 import { useControl, useNotifications, useSpeech } from '../state/app';
 import { BellIcon, PauseIcon, PlayIcon } from './icons';
 import { CommandPalette } from './CommandPalette';
+import { useAuth } from '../state/auth';
+
+// Pages for people who use JARVIS for themselves. Auditors (audit-only role) see only ALWAYS pages.
+const ALWAYS = new Set(['/activity', '/settings', '/help']);
+
+export function useNav() {
+  const { can } = useAuth();
+  return NAV.filter((n) => ALWAYS.has(n.to) || can('use'));
+}
 
 export const NAV = [
   { to: '/', label: 'Today', icon: '◐', mobile: true },
@@ -141,6 +150,8 @@ function HudStatus() {
 
 export function Layout({ children }: { children: ReactNode }) {
   const brand = useBrand();
+  const nav = useNav();
+  const { can } = useAuth();
   return (
     <div className="shell">
       <a href="#main" className="skip-link">
@@ -152,7 +163,7 @@ export function Layout({ children }: { children: ReactNode }) {
           {brand}
         </div>
         <nav>
-          {NAV.map((n) => (
+          {nav.map((n) => (
             <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
               <span className="nav-icon" aria-hidden="true">
                 {n.icon}
@@ -172,7 +183,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <CommandPalette />
           <div className="topbar-right">
             <StopSpeaking />
-            <PauseControl />
+            {can('org.pause') && <PauseControl />}
             <Bell />
           </div>
         </header>
@@ -182,7 +193,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </main>
       </div>
       <nav className="bottom-nav" aria-label="Primary mobile">
-        {NAV.filter((n) => n.mobile).map((n) => (
+        {nav.filter((n) => n.mobile).map((n) => (
           <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => `bn-link ${isActive ? 'active' : ''}`}>
             <span className="nav-icon" aria-hidden="true">
               {n.icon}
@@ -202,11 +213,12 @@ export function Layout({ children }: { children: ReactNode }) {
 }
 
 export function MorePage() {
+  const nav = useNav();
   return (
     <div className="page">
       <h1>More</h1>
       <ul className="more-list">
-        {NAV.filter((n) => !n.mobile).map((n) => (
+        {nav.filter((n) => !n.mobile).map((n) => (
           <li key={n.to}>
             <Link to={n.to} className="more-link">
               <span aria-hidden="true">{n.icon}</span> {n.label}

@@ -4,9 +4,14 @@ Container hardening (DockerRuntime.start): unprivileged user, all capabilities d
 root filesystem (writable /workspace volume + size-capped tmpfs), CPU/memory/pid limits, and an `--internal` network
 whose only exit is the `jarvis-egress` allowlist proxy (sandbox/egress_proxy.py). No host paths are mounted.
 Everything here shells out to the `docker` CLI with argument lists (no shell interpolation of model text).
+
+Each user gets their own container, volume, internal network and egress proxy (`names_for`), so one person's files,
+browser state and network window are never visible to another. The first owner keeps the original V4 names so an
+existing workspace survives the upgrade.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shlex
 import shutil
@@ -17,10 +22,24 @@ from pathlib import Path
 from typing import Protocol
 
 IMAGE = "jarvis-sandbox:1"
-CONTAINER = "jarvis-sbx"
-PROXY = "jarvis-egress"
-NETWORK = "jarvis-sbx-net"
-VOLUME = "jarvis-sbx-work"
+OWNER = "usr_owner"
+LABEL = "jarvis.sandbox=1"
+
+
+@dataclass(frozen=True)
+class Names:
+    container: str
+    proxy: str
+    network: str
+    volume: str
+
+
+def names_for(uid: str) -> Names:
+    if uid == OWNER:
+        return Names("jarvis-sbx", "jarvis-egress", "jarvis-sbx-net", "jarvis-sbx-work")
+    suf = hashlib.sha256(uid.encode()).hexdigest()[:10]
+    return Names(f"jarvis-sbx-{suf}", f"jarvis-egress-{suf}", f"jarvis-sbx-net-{suf}", f"jarvis-sbx-work-{suf}")
+
 BUILD_DIR = Path(__file__).resolve().parents[3] / "sandbox"
 MAX_OUTPUT = 20000
 SCREEN = (1280, 800)
@@ -64,7 +83,9 @@ class DockerRuntime:
     name = "docker"
     simulated = False
 
-    def __init__(self) -> None:
+    def __init__(self, uid: str = OWNER) -> None:
+        self.uid = uid
+        self.n = names_for(uid)
         self._avail: tuple[float, tuple[bool, str]] | None = None
 
     def _docker(self, *args: str, timeout: float = 60, stdin: bytes | None = None, check: bool = True):
@@ -99,6 +120,11 @@ class DockerRuntime:
         p = self._docker("build", "-t", IMAGE, str(BUILD_DIR), timeout=1800)
         return _clip(p.stdout[-4000:])
 
+    def count_running(self) -> int:
+        """Sandboxes running across all users (for the org's concurrency cap)."""
+        p = self._docker("ps", "-q", "--filter", f"label={LABEL}", check=False, timeout=15)
+        return len([x for x in p.stdout.split() if x]) if p.returncode == 0 else 0
+
     def _running(self, name: str) -> bool:
         p = self._docker("inspect", "-f", "{{.State.Running}}", name, check=False, timeout=15)
         return p.returncode == 0 and p.stdout.strip() == b"true"
@@ -108,7 +134,7 @@ class DockerRuntime:
         if not ok:
             return {"runtime": "docker", "available": False, "detail": why}
         return {"runtime": "docker", "available": True, "detail": why, "image": self.image_present(),
-                "running": self._running(CONTAINER), "proxy": self._running(PROXY)}
+                "running": self._running(self.n.container), "proxy": self._running(self.n.proxy)}
 
     def start(self) -> None:
         ok, why = self.available()
@@ -116,35 +142,37 @@ class DockerRuntime:
             raise SandboxUnavailable(why)
         if not self.image_present():
             raise SandboxUnavailable("The sandbox image isn't built yet (Settings → Sandbox → Build, ~5 minutes once).")
-        if self._docker("network", "inspect", NETWORK, check=False).returncode != 0:
-            self._docker("network", "create", "--internal", NETWORK)
-        if not self._running(PROXY):
-            self._docker("rm", "-f", PROXY, check=False)
-            self._docker("run", "-d", "--name", PROXY, "--network", "bridge", "--cap-drop", "ALL",
+        if self._docker("network", "inspect", self.n.network, check=False).returncode != 0:
+            self._docker("network", "create", "--internal", self.n.network)
+        if not self._running(self.n.proxy):
+            self._docker("rm", "-f", self.n.proxy, check=False)
+            self._docker("run", "-d", "--name", self.n.proxy, "--label", LABEL + "-proxy", "--network", "bridge",
+                         "--cap-drop", "ALL",
                          "--security-opt", "no-new-privileges", "--memory", "128m", "--pids-limit", "64", "--read-only",
                          "--tmpfs", "/run/allow:size=1m,uid=1000", "--user", "1000:1000", IMAGE,
                          "python", "/opt/jarvis/egress_proxy.py")
-            self._docker("network", "connect", "--alias", "egress", NETWORK, PROXY)
+            self._docker("network", "connect", "--alias", "egress", self.n.network, self.n.proxy)
             self.set_egress([], 0)
-        if not self._running(CONTAINER):
-            self._docker("rm", "-f", CONTAINER, check=False)
-            self._docker("run", "-d", "--name", CONTAINER, "--network", NETWORK, "--cpus", "2", "--memory", "2g",
+        if not self._running(self.n.container):
+            self._docker("rm", "-f", self.n.container, check=False)
+            self._docker("run", "-d", "--name", self.n.container, "--label", LABEL, "--network", self.n.network,
+                         "--cpus", "2", "--memory", "2g",
                          "--pids-limit", "512", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only",
-                         "--tmpfs", "/tmp:size=1g,uid=1000", "--mount", f"type=volume,src={VOLUME},dst=/workspace",  # nosec B108 tmpfs inside the sandbox container, not the host
+                         "--tmpfs", "/tmp:size=1g,uid=1000", "--mount", f"type=volume,src={self.n.volume},dst=/workspace",  # nosec B108 tmpfs inside the sandbox container, not the host
                          "-e", "HTTP_PROXY=http://egress:3128", "-e", "HTTPS_PROXY=http://egress:3128",
                          "-e", "http_proxy=http://egress:3128", "-e", "https_proxy=http://egress:3128",
                          "--user", "1000:1000", IMAGE)
 
     def stop(self) -> None:
-        self._docker("rm", "-f", CONTAINER, check=False)
+        self._docker("rm", "-f", self.n.container, check=False)
 
     def reset(self) -> None:
-        self._docker("rm", "-f", CONTAINER, check=False)
-        self._docker("volume", "rm", "-f", VOLUME, check=False)
+        self._docker("rm", "-f", self.n.container, check=False)
+        self._docker("volume", "rm", "-f", self.n.volume, check=False)
 
     def exec(self, command: str, timeout_s: int, stdin: bytes | None = None) -> ExecResult:
         t = time.perf_counter()
-        args = ["exec", "-i", "-w", "/workspace", CONTAINER, "timeout", "-k", "5", str(timeout_s), "bash", "-lc", command]
+        args = ["exec", "-i", "-w", "/workspace", self.n.container, "timeout", "-k", "5", str(timeout_s), "bash", "-lc", command]
         try:
             p = self._docker(*args, timeout=timeout_s + 20, stdin=stdin, check=False)
         except subprocess.TimeoutExpired:
@@ -154,7 +182,7 @@ class DockerRuntime:
 
     def read_bytes(self, path: str, max_bytes: int) -> bytes | None:
         # Binary-safe and unclipped (exec output is clipped for the model); the caller validated `path`.
-        p = self._docker("exec", CONTAINER, "head", "-c", str(max_bytes + 1), "--", path, timeout=60, check=False)
+        p = self._docker("exec", self.n.container, "head", "-c", str(max_bytes + 1), "--", path, timeout=60, check=False)
         if p.returncode != 0:
             return None
         if len(p.stdout) > max_bytes:
@@ -163,15 +191,15 @@ class DockerRuntime:
 
     def set_egress(self, domains: list[str], until_unix: float) -> None:
         body = json.dumps({"domains": sorted({d.lower() for d in domains}), "until": until_unix}).encode()
-        self._docker("exec", "-i", PROXY, "sh", "-c", "cat > /run/allow/allow.json", stdin=body, timeout=15)
+        self._docker("exec", "-i", self.n.proxy, "sh", "-c", "cat > /run/allow/allow.json", stdin=body, timeout=15)
 
     def screenshot(self) -> bytes:
-        p = self._docker("exec", CONTAINER, "import", "-window", "root", "png:-", timeout=30)
+        p = self._docker("exec", self.n.container, "import", "-window", "root", "png:-", timeout=30)
         return p.stdout
 
     def input(self, args: list[str]) -> ExecResult:
         t = time.perf_counter()
-        p = self._docker("exec", CONTAINER, "xdotool", *args, timeout=30, check=False)
+        p = self._docker("exec", self.n.container, "xdotool", *args, timeout=30, check=False)
         return ExecResult(p.returncode, _clip(p.stdout), _clip(p.stderr), int((time.perf_counter() - t) * 1000))
 
 
@@ -191,6 +219,9 @@ class FakeRuntime:
 
     def available(self) -> tuple[bool, str]:
         return True, "simulated runtime"
+
+    def count_running(self) -> int:
+        return 1 if self.running else 0
 
     def status(self) -> dict:
         return {"runtime": "fake", "available": True, "detail": "simulated", "image": True, "running": self.running,
@@ -237,16 +268,26 @@ class FakeRuntime:
         return ExecResult(0, "", "", 1)
 
 
-_runtime: Runtime | None = None
+_runtimes: dict[str, Runtime] = {}
+_override: Runtime | None = None
 
 
-def get_runtime() -> Runtime:
-    global _runtime
-    if _runtime is None:
-        _runtime = DockerRuntime()
-    return _runtime
+def get_runtime(uid: str = OWNER) -> Runtime:
+    """The user's sandbox. A test override (set_runtime) applies to every user unless one was set for that user."""
+    if uid in _runtimes:
+        return _runtimes[uid]
+    if _override is not None:
+        return _override
+    _runtimes[uid] = DockerRuntime(uid)
+    return _runtimes[uid]
 
 
-def set_runtime(r: Runtime | None) -> None:
-    global _runtime
-    _runtime = r
+def set_runtime(r: Runtime | None, uid: str | None = None) -> None:
+    global _override
+    if uid is None:
+        _override = r
+        _runtimes.clear()
+    elif r is None:
+        _runtimes.pop(uid, None)
+    else:
+        _runtimes[uid] = r

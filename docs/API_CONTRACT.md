@@ -8,17 +8,59 @@ Auth: cookie `jarvis_session` (HttpOnly, SameSite=Strict). Every non-GET request
 must send header `X-CSRF-Token: <csrf_token>` (returned by setup/login/status). `401` → show login.
 
 ## Auth
+Every authenticated request resolves to a **principal** (user + role + session). Per-user data is private: an id
+that is unknown *or belongs to someone else* answers **404**, never 403. A route the role can't use answers **403**.
+A session that still owes a second factor answers `403 {"detail":{"code":"mfa_enroll"|"mfa_required", ...}}` on
+everything except `/api/auth/me`, `/api/auth/mfa*` and `/api/auth/logout`.
+
 | Method | Path | Body → Response |
 |---|---|---|
-| GET | /api/auth/status | → `{owner_exists, authenticated, csrf_token?, remote_mode, setup_allowed, setup_token_required}` |
-| POST | /api/auth/setup | `{password (12+), setup_token?}` → `{csrf_token}` + cookie. Once. Without a token only from a *direct* loopback client in the local profile; a proxied request or the remote profile needs the console token (`jarvis serve` prints it; `jarvis setup-token`). 403 without it. |
-| POST | /api/auth/login | `{password}` → `{csrf_token}` + cookie. Revokes the session the browser already carried. 429 when throttled (per IP: 10 failures / 15 min; after 30 failures across IPs, only IPs that signed in before in the last 30 days). |
+| GET | /api/auth/status | → `{owner_exists, authenticated, csrf_token?, user?:Me, mfa?:{required, enrolled, satisfied}, remote_mode, setup_allowed, setup_token_required}` |
+| POST | /api/auth/setup | `{username, password (12+), display_name?, setup_token?}` → `{csrf_token}` + cookie. Creates the first **owner**, once. Without a token only from a *direct* loopback client in the local profile; a proxied request or the remote profile needs the console token (`jarvis serve` prints it; `jarvis setup-token`). |
+| POST | /api/auth/login | `{username, password}` → `{csrf_token}` + cookie, **or** (account has a second factor) `{mfa_required:true, challenge_id, methods:["totp"\|"webauthn"\|"recovery"], webauthn?:PublicKeyCredentialRequestOptions}` with no session yet. Disabled or dormant (`JARVIS_DORMANT_DAYS`, default 90) accounts are refused. 429 when throttled: per IP 10 failures / 15 min; per username 10 failures / 15 min unless this IP signed in as that user in the last 30 days; after 30 failures overall, only known IPs. |
+| POST | /api/auth/mfa/verify | `{challenge_id, method:"totp"\|"webauthn"\|"recovery", code?, credential?}` → `{csrf_token}` + cookie (session `auth_level="mfa"`). Challenge: 5 min, single use. TOTP codes can't be replayed; recovery codes work once. |
+| GET | /api/auth/invite/{token} | → `{username, display_name, expires_at}` (public, throttled) |
+| POST | /api/auth/invite/accept | `{token, password}` → `{csrf_token}` + cookie. Single use, 72 h. |
+| GET | /api/auth/me | → `Me = {id, username, display_name, role:"owner"\|"admin"\|"approver"\|"member"\|"auditor", auth_level:"password"\|"mfa"\|"device"}` |
 | POST | /api/auth/logout | → `{ok}` |
-| POST | /api/auth/pairing-code | → `{code, expires_at}` (authenticated; for pairing a phone) |
+| POST | /api/auth/password | `{current_password, new_password}` → `{ok, signed_out}` (other sessions end) |
+| POST | /api/auth/pairing-code | → `{code, expires_in_s}` (role with `use`; pairs a phone **to you**; a paired phone's session is `auth_level="device"`) |
 | POST | /api/auth/pair | `{code, label}` → `{csrf_token}` + cookie. 429 after 5 wrong codes per IP or 30 overall in 15 min. |
-| GET | /api/auth/sessions | → `[{id, label, created_at, last_seen_at, expires_at, ip, user_agent, current}]` (active devices) |
-| POST | /api/auth/sessions/{id}/revoke | → `{ok, current}`; 404 if not active |
+| GET | /api/auth/sessions | → `[{id, label, created_at, last_seen_at, expires_at, ip, user_agent, current}]` (your active devices) |
+| POST | /api/auth/sessions/{id}/revoke | → `{ok, current}`; 404 if not yours/active |
 | POST | /api/auth/sessions/revoke-others | → `{revoked}` (keeps the calling session) |
+
+### Second factor (allowed while enrolling)
+| Method | Path | Body → Response |
+|---|---|---|
+| GET | /api/auth/mfa | → `{required, enrolled, satisfied, policy:"off"\|"privileged"\|"all", methods:[{id, kind:"totp"\|"webauthn", label, created_at, last_used_at}], recovery_codes_left}` |
+| POST | /api/auth/mfa/totp/begin | `{label?}` → `{id, secret, otpauth_uri}` (unconfirmed until the next call) |
+| POST | /api/auth/mfa/totp/confirm | `{id, code}` → `{ok, recovery_codes: [10] \| null}`; 400 on a wrong code (throttled like sign-in) |
+| POST | /api/auth/mfa/webauthn/begin | `{label?}` → `{challenge_id, options:PublicKeyCredentialCreationOptions}` (RP ID = the host you browse) |
+| POST | /api/auth/mfa/webauthn/finish | `{challenge_id, credential}` → `{ok, recovery_codes: [10] \| null}` |
+| POST | /api/auth/mfa/recovery-codes | → `{recovery_codes:[10]}` (replaces the old set; needs a satisfied session) |
+| DELETE | /api/auth/mfa/{id} | → `{ok}`; 400 when it is the last method and MFA is required for you |
+
+Enrolling a first factor upgrades the current session to `mfa` and returns recovery codes **once**.
+Policy `JARVIS_MFA_POLICY`: `auto` (default: `all` in the remote profile, `privileged` = owner/admin/approver otherwise),
+`privileged`, `all`, `off`.
+
+### People (permission `users.manage` = owner, admin)
+| Method | Path | Body → Response |
+|---|---|---|
+| GET | /api/users | → `[{id, username, display_name, email, role, status:"active"\|"disabled", created_at, last_login_at, mfa_methods, active_sessions, has_password, invite_pending_until}]` — account metadata only, never content |
+| POST | /api/users | `{username, display_name, email?, role}` → `{user, invite_url, invite_expires_hours}` |
+| PATCH | /api/users/{id} | `{display_name?, role?, status?}` → user. Disabling ends sessions, voids invites, pauses missions/schedules (data kept). |
+| POST | /api/users/{id}/invite | → `{invite_url, invite_expires_hours}` (also the forgotten-password path; older links stop working) |
+| POST | /api/users/{id}/reset-mfa | → user (second factors removed, sessions ended) |
+
+Only owners grant, remove or manage the owner/admin roles. Nobody changes their own role or status here. The last
+active owner can't be demoted or disabled.
+
+Roles → permissions (`security/principal.py` `PERMS`): `use` (owner, admin, approver, member) ·
+`approve.dual` (owner, admin, approver) · `users.manage`, `org.settings`, `org.integrations`, `org.backups`,
+`org.doctor`, `org.pause` (owner, admin) · `users.owner` (owner) · `audit.read` (owner, admin, auditor).
+Auditors can only use `/api/auth/*`, `/api/activity`, `/api/manual*` and their own settings.
 
 Sessions end after `JARVIS_SESSION_IDLE_HOURS` without use (default 168) or `JARVIS_SESSION_TTL_HOURS` (default 336),
 whichever comes first. Every response carries a strict `Content-Security-Policy`; HTTPS responses add HSTS.
@@ -72,8 +114,8 @@ item `proposed|approved|queued|executing|verified|failed|unknown|conflict|cancel
 | POST | /api/proposals/{id}/retry | `{items:[int]}` → `Proposal` (only failed/unknown items; unknown reconciles first) |
 | GET | /api/actions/history?limit= | → `[{action..., proposal_id, proposal_title, approved_at, receipt, attempts:[...]}]` |
 | GET | /api/control | → `{actions_paused, paused_at, reason, in_flight:[{action_id, summary, state}]}` |
-| POST | /api/control/pause | `{reason?}` → control |
-| POST | /api/control/resume | → control (does NOT replay previous approvals) |
+| POST | /api/control/pause | `{reason?}` → control (`org.pause`; pauses every person's actions) |
+| POST | /api/control/resume | → control (`org.pause`; does NOT replay previous approvals) |
 | GET | /api/policies | → `{rules:[Rule], catalog:[{action_type, label, provider, tier, automatable, undo, reaches_others}], undo_window_minutes}` |
 | POST | /api/policies | `{action_type, label, match?:{target_resource?, args?}, origins?:["command"\|"mission"\|"channel"], daily_cap?, expires_at?}` → `Rule` (400 `not_t1` for T2/T3 types) |
 | DELETE | /api/policies/{id} | → `Rule` (revoked) |
@@ -81,6 +123,14 @@ item `proposed|approved|queued|executing|verified|failed|unknown|conflict|cancel
 
 `Rule` = `{id, action_type, action_label, label, match, origins, daily_cap, used_24h, created_at, expires_at, revoked_at, active}`.
 Approval `channel` is `button|voice|typed|policy|telegram|discord`. History items add `auto_approved`, `undo_until`, `undone_by`.
+
+### Co-approval (enterprise edition)
+Action types with a `co_approver_perm` (today: `skill.install` → `org.integrations`) need the requester's approval
+**and** a second, different person holding that permission before the executor runs them.
+| Method | Path | Body → Response |
+|---|---|---|
+| GET | /api/approvals/co | → `[{id, title, version, hash, summary, requested_by, requested_username, created_at, needs:[perm], items:[{index, action_type, args, expected_effect, state}]}]` |
+| POST | /api/approvals/co/{id} | `{version, hash, decision:"approve"\|"decline"}` → proposal status; 404 if not visible to you, 409 if stale |
 
 ## Runs (live progress)
 | Method | Path | Body → Response |
@@ -122,7 +172,8 @@ Approval `channel` is `button|voice|typed|policy|telegram|discord`. History item
 | POST | /api/documents | multipart `file`, `project_id?` → `Document` |
 | GET | /api/documents | → `[Document]` = `{id, title, mime, origin, project_id, created_at, version, sha256, status, processing:{stages..., visual:{images, rendered_pages, needs_vision}}, segments}` |
 | GET | /api/documents/{id} | → Document + `segments:[{id, locator, kind, excerpt}]` |
-| DELETE | /api/documents/{id} | → `{ok}` |
+| DELETE | /api/documents/{id} | → `{ok}` (owner of the document only) |
+| POST | /api/documents/{id}/visibility | `{visibility:"private"\|"org"}` → `{visibility}`. Documents carry `visibility` and `own`; org-shared documents from others are searchable and readable, never writable. |
 | GET | /api/search?q=&project_id= | → `[Citation & {kind, score}]` |
 | POST | /api/evidence/preview | `{document_ids:[..], question}` → `{blocks:[{type:"text"\|"image", locator, chars?\|bytes?, media_type?}], estimated_input_tokens, leaves_machine:true}` |
 
@@ -144,16 +195,16 @@ Approval `channel` is `button|voice|typed|policy|telegram|discord`. History item
 | POST | /api/integrations/ics/refresh | → `{items, changed, last_refresh}` |
 | GET | /api/deadlines | → `[Deadline]` ; GET/POST /api/course-mappings |
 | POST | /api/integrations/github | `{token, repos:[string]}` ; GET /api/github/status |
-| POST | /api/integrations/anthropic | `{api_key}` |
+| POST | /api/integrations/anthropic | `{api_key}` (`org.integrations`; org-level account) |
 | DELETE | /api/integrations/{account_id} | disconnect (revokes where supported) |
-| GET | /api/localops/roots ; POST `{path, label, writable}` ; DELETE /api/localops/roots/{id} |
+| GET | /api/localops/roots ; POST `{path, label, writable}` ; DELETE /api/localops/roots/{id} | (POST/DELETE need `org.integrations`) |
 | GET | /api/localops/list?root_id=&path= ; /read ; /search?root_id=&q= |
-| GET | /api/settings ; PATCH `{display_name?, timezone?, voice?:{voice_name, rate, muted, auto_speak}, privacy?:{retain_audio}}` |
-| GET | /api/budget ; PATCH `{paid_inference_enabled, background_paid_enabled, daily_limit_usd, monthly_limit_usd, max_output_tokens, max_tool_calls, max_specialists, effort}` → `{..., spent_today_usd, spent_month_usd, reserved_usd, pricing, measured_vs_estimated}` |
-| GET | /api/doctor | → `{checks:[{name, status:"ok"\|"warn"\|"fail"\|"pending", detail, remedy}]}` |
+| GET | /api/settings ; PATCH `{display_name?, timezone?, voice?:{voice_name, rate, muted, auto_speak}, privacy?:{retain_audio}, models?, brand?}` | personal settings; `models`/`brand` are org settings (403 without `org.settings`) |
+| GET | /api/budget (`can_edit`, your share) ; PATCH (`org.settings`) `{paid_inference_enabled, background_paid_enabled, daily_limit_usd, monthly_limit_usd, max_output_tokens, max_tool_calls, max_specialists, effort}` → `{..., spent_today_usd, spent_month_usd, reserved_usd, pricing, measured_vs_estimated}` |
+| GET | /api/doctor (`org.doctor`) | → `{checks:[{name, status:"ok"\|"warn"\|"fail"\|"pending", detail, remedy}]}` |
 | GET | /api/metrics/latency | → `{kind: {count, p50_ms, p95_ms, last_ms}}` |
-| GET | /api/activity?limit= | → `[{at, kind, message, run_id?, entity_type?, entity_id?}]` |
-| POST | /api/backups | → `{id, path, sha256, bytes, schema_version}` ; GET /api/backups |
+| GET | /api/activity?limit=&scope=mine\|org | → `[{at, kind, message, run_id?, entity_type?, entity_id?, actor_user_id?}]`. `scope=org` needs `audit.read`; other people's messages are reduced to the event kind. |
+| POST | /api/backups (`org.backups`, also the routes below) | → `{id, path, sha256, bytes, schema_version}` ; GET /api/backups |
 | POST | /api/backups/{id}/restore-preview | → `{compatible, counts, will_disable:[..], pre_restore_backup:true}` |
 | POST | /api/backups/{id}/restore | `{confirm:true}` → `{ok, pre_restore_backup_id}` |
 
@@ -168,17 +219,17 @@ Approval `channel` is `button|voice|typed|policy|telegram|discord`. History item
 | | POST | /api/connectors/{id}/connect `{values}` | token connectors |
 | | GET/POST | /api/connectors/{id}/resources `{read?, write?}` | allowlist picker (write requires read where both exist) |
 | | POST | /api/connectors/spotify/start | callback (public): `/api/integrations/spotify/callback` |
-| MCP | GET/POST | /api/mcp | add `{name, transport: stdio\|http, command?, args?, url?, env?, bearer?}` → discovers tools |
+| MCP | GET/POST | /api/mcp (writes: `org.integrations`) | add `{name, transport: stdio\|http, command?, args?, url?, env?, bearer?}` → discovers tools |
 | | POST | /api/mcp/{id}/discover, /review `{modes:{tool:{mode,tier}}}`, /enabled `{enabled}` | review pins the tool-list hash |
 | | DELETE | /api/mcp/{id} | |
 | Vault | GET/POST | /api/vault, /api/vault/roots/{id} `{enabled}`, /reindex | |
 | Missions | GET | /api/missions | `{missions, templates, families, read_only_families}` |
-| | POST/PATCH/DELETE | /api/missions[/{id}] | schedule `{kind: daily\|weekly\|interval, at?, days?, minutes?}` |
+| | POST/PATCH/DELETE | /api/missions[/{id}] (your own) | schedule `{kind: daily\|weekly\|interval, at?, days?, minutes?}` |
 | | POST | /api/missions/{id}/run, /enabled | run is queued for the worker |
-| Telegram | GET/POST | /api/channels/telegram `{token}`, /pair, /unpair, /notify `{notify}` | |
+| Telegram | GET/POST | /api/channels/telegram `{token}`, /pair, /unpair, /notify `{notify}` | bot token: `org.integrations`; each person pairs their own chat |
 | Sandbox | GET | /api/sandbox, /api/sandbox/history, /api/sandbox/shots/{id} (PNG) | |
-| | POST | /api/sandbox/start, /stop, /reset, /build, /network/close, /settings `{computer_use}` | |
-| Skills | GET/POST/DELETE | /api/skills, /install `{folder}`, /{name}/enabled, /{name} | |
+| | POST | /api/sandbox/start, /stop, /reset, /build, /network/close, /settings `{computer_use}` | your own container (`jarvis-sbx-<id>`); `/build` needs `org.integrations` |
+| Skills | GET/POST/DELETE | /api/skills, /install `{folder}`, /{name}/enabled, /{name} | install/delete: `org.integrations`; enabled is per person |
 | Today | GET | /api/headsup, /api/report/weekly | proactive cards; weekly estimate with stated basis |
 | Help | GET | /api/manual, /api/manual/search?q= | guides + reference generated from registries |
 | Activity | GET | /api/activity?actor= | user\|policy\|mission\|channel\|system\|worker\|model |

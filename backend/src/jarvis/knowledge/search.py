@@ -30,9 +30,12 @@ def build_match_query(q: str, mode: str = "AND") -> str | None:
     return joiner.join('"' + t.replace('"', '""') + '"' for t in seen)
 
 
-def search(conn: sqlite3.Connection, q: str, project_id: str | None = None, limit: int = 10,
+def search(conn: sqlite3.Connection, uid: str, q: str, project_id: str | None = None, limit: int = 10,
            exclude_sensitive_projects: bool = True, allowed_project_ids: set | None = None) -> list[dict]:
     """Rank current-version text segments by bm25. AND semantics first, OR fallback for recall.
+
+    Only the user's own documents and documents other users shared with the org (never from their sensitive
+    projects) are searched.
 
     Sensitive projects (projects.sensitive=1) are excluded unless the project is explicitly
     requested via project_id, listed in allowed_project_ids, or exclusion is turned off.
@@ -42,16 +45,17 @@ def search(conn: sqlite3.Connection, q: str, project_id: str | None = None, limi
         mq = build_match_query(q, mode)
         if mq is None:
             return []
-        res = _run(conn, mq, project_id, limit, exclude_sensitive_projects, set(allowed_project_ids or ()))
+        res = _run(conn, uid, mq, project_id, limit, exclude_sensitive_projects, set(allowed_project_ids or ()))
         if res:
             return res
     return []
 
 
-def _run(conn: sqlite3.Connection, mq: str, project_id: str | None, limit: int, exclude_sensitive: bool,
+def _run(conn: sqlite3.Connection, uid: str, mq: str, project_id: str | None, limit: int, exclude_sensitive: bool,
          allowed: set) -> list[dict]:
-    where = ["evidence_fts MATCH ?", "d.deleted_at IS NULL", "v.id = d.current_version_id"]
-    params: list = [mq]
+    where = ["evidence_fts MATCH ?", "d.deleted_at IS NULL", "v.id = d.current_version_id",
+             "(d.user_id = ? OR (d.visibility = 'org' AND COALESCE(p.sensitive, 0) = 0))"]
+    params: list = [mq, uid]
     if project_id is not None:
         where.append("d.project_id = ?")
         params.append(project_id)
@@ -65,7 +69,7 @@ def _run(conn: sqlite3.Connection, mq: str, project_id: str | None, limit: int, 
         where.append(clause + ")")
     sql = f"""
         SELECT s.id AS segment_id, s.kind, s.locator, d.id AS document_id, d.title, d.project_id,
-               v.id AS version_id, v.version,
+               v.id AS version_id, v.version, d.user_id = ? AS own,
                snippet(evidence_fts, 0, '[', ']', '…', 30) AS excerpt,
                bm25(evidence_fts) AS rank
         FROM evidence_fts
@@ -78,9 +82,10 @@ def _run(conn: sqlite3.Connection, mq: str, project_id: str | None, limit: int, 
         LIMIT ?"""  # nosec B608 clauses/placeholders from code; values bound
     params.append(limit)
     out = []
-    for r in conn.execute(sql, params).fetchall():
+    for r in conn.execute(sql, [uid, *params]).fetchall():
         d = dict(r)
         d["score"] = round(-float(d.pop("rank")), 6)
+        d["own"] = bool(d["own"])
         d["untrusted"] = True
         out.append(d)
     return out
