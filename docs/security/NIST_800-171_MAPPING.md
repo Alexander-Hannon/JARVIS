@@ -13,20 +13,20 @@ customer's environment by a C3PAO, and JARVIS is one component inside it.
   - *customer*: nothing for the product to do.
 - **Review.** Every milestone updates this file. Each *planned* row is a product POA&M item.
 
-**Summary (session 10, 2026-10-05):** 11 in place · 41 partial · 23 planned · 35 customer-only.
+**Summary (session 11, 2026-10-06):** 19 in place · 41 partial · 15 planned · 35 customer-only.
 
 ## 3.1 Access Control
 
 | Req | Requirement | Responsibility | Status | How / gap |
 |---|---|---|---|---|
-| 3.1.1 | Limit access to authorized users, processes, devices | Shared | partial | Every API route except auth/OAuth callbacks requires a session (`api/app.py`). Single owner today; M1 adds users, SSO, SCIM. |
-| 3.1.2 | Limit access to permitted transactions and functions | Shared | partial | Executable writes are only the types in `actions/registry.py`; T2/T3 tiers. M1 adds a per-route permission matrix (RBAC). |
+| 3.1.1 | Limit access to authorized users, processes, devices | Shared | in place | M1a: named user accounts (`users`), per-user sessions and device pairing; every route resolves a `Principal`; disabled/dormant users are refused. Data is private per user: services filter on `user_id`, DB triggers refuse unscoped rows, foreign ids answer 404 (`tests/test_v5_isolation.py` sweeps every route). Customer decides who gets an account. |
+| 3.1.2 | Limit access to permitted transactions and functions | Product | in place | M1a: role → permission matrix (`security/principal.py` `PERMS`) enforced per route (`require(perm)`), tested in `tests/test_v5_roles.py`. Executable writes are only the types in `actions/registry.py`; T2/T3 tiers. |
 | 3.1.3 | Control the flow of CUI | Product | planned M2 | Classification labels + provider authorization routing (CUI only to `cui_authorized` providers). Sandbox egress allowlist and SSRF guard exist today. |
-| 3.1.4 | Separation of duties | Product | planned M1 | Roles (`approver`, `auditor`, …) and `dual` approval for org-impacting T2 actions. |
-| 3.1.5 | Least privilege | Shared | partial | Per-resource read/write grants, agent `Scope` per mission, sandbox cap-drop ALL. M1: role-scoped permissions; agents act as the requesting principal. |
-| 3.1.6 | Non-privileged accounts for nonsecurity functions | Customer | planned M1 | Product supplies `member` vs `admin` roles; customer assigns them. |
-| 3.1.7 | Prevent non-privileged users from executing privileged functions; audit it | Product | planned M1 | Privileged functions (policy rules, connector approval, keys) gated by role and audited. |
-| 3.1.8 | Limit unsuccessful logon attempts | Product | in place | M0: per-IP DB-backed throttles (login 10 / pairing 5 / setup 10 per 15 min), account-wide limit that still admits known devices (`security/auth.py`). |
+| 3.1.4 | Separation of duties | Shared | partial | M1a: `approver` and `auditor` roles; org-impacting actions with `co_approver_perm` (`skill.install`) need a second, different person (enterprise edition); only owners grant admin/owner. Gap: more action types to mark; the customer defines who holds which role. |
+| 3.1.5 | Least privilege | Shared | partial | M1a: role-scoped permissions; agents, missions and channels act as the requesting user (their accounts, grants, sandbox only); per-resource read/write grants; agent `Scope`; sandbox cap-drop ALL. Customer assigns minimal roles. |
+| 3.1.6 | Non-privileged accounts for nonsecurity functions | Shared | partial | M1a: `member` role has no org functions; admins can hold a separate member account. Customer policy to use it. |
+| 3.1.7 | Prevent non-privileged users from executing privileged functions; audit it | Product | in place | M1a: user management, org settings, integrations (MCP, skills, Telegram bot, workspace roots, sandbox image), backups, diagnostics and org pause require admin permissions (403 otherwise); every change is audited with the actor's user id. |
+| 3.1.8 | Limit unsuccessful logon attempts | Product | in place | Per-IP DB-backed throttles (login 10 / pairing 5 / setup 10 / invite 10 / MFA 10 per 15 min), per-username limit of 10 that still admits devices which signed in as that user, account-wide limit (`security/auth.py`). |
 | 3.1.9 | Privacy and security notices | Shared | partial | First-run screen states data flows. M1: configurable login banner text for the customer's CUI notice. |
 | 3.1.10 | Session lock after inactivity | Shared | in place | M0: idle timeout `JARVIS_SESSION_IDLE_HOURS` ends the session for good. Pattern-hiding screen lock is the endpoint's (customer). |
 | 3.1.11 | Terminate session after a defined condition | Product | in place | M0: absolute lifetime (`JARVIS_SESSION_TTL_HOURS`) + idle timeout; logout revokes; password reset revokes all. |
@@ -55,14 +55,14 @@ customer's environment by a C3PAO, and JARVIS is one component inside it.
 | Req | Requirement | Responsibility | Status | How / gap |
 |---|---|---|---|---|
 | 3.3.1 | Create and retain audit records | Shared | partial | `audit_events` records auth, approvals, policy, connector and execution events. M2: retention policy, legal hold, SIEM export. |
-| 3.3.2 | Trace actions to individual users | Product | partial | Actor + (M0) IP/user agent on auth events. M1: user id on every event; M2: session + request id. |
+| 3.3.2 | Trace actions to individual users | Product | in place | M1a: `actor_user_id` on every audit event, `approved_by` on every approval, `user_id` on proposals/runs/actions; auth events carry IP + user agent. M2 adds request ids. |
 | 3.3.3 | Review and update logged events | Shared | planned M2 | Event catalog documented; customer reviews it annually. |
 | 3.3.4 | Alert on audit logging failure | Product | planned M2 | Doctor check + alert when the audit chain/export fails. |
 | 3.3.5 | Correlate audit review, analysis, reporting | Shared | planned M2 | Syslog/CEF + OpenTelemetry export to the customer's SIEM. |
 | 3.3.6 | Audit reduction and report generation | Product | partial | Activity page filters by actor; M2 adds exports. |
 | 3.3.7 | Authoritative time source | Customer | customer | All instants are UTC from the host clock; the host must use NTP. |
 | 3.3.8 | Protect audit information | Product | planned M2 | Hash-chained, append-only audit with signed checkpoints; Postgres role cannot UPDATE/DELETE. |
-| 3.3.9 | Limit audit management to privileged users | Product | planned M1 | `auditor`/`admin` roles; no agent tool can touch audit. |
+| 3.3.9 | Limit audit management to privileged users | Product | partial | M1a: org-wide audit view needs `audit.read` (owner/admin/auditor) and shows other people's events as metadata only; no API or agent tool edits or deletes audit rows. Gap: tamper-evident export (M2). |
 
 ## 3.4 Configuration Management
 
@@ -82,15 +82,15 @@ customer's environment by a C3PAO, and JARVIS is one component inside it.
 
 | Req | Requirement | Responsibility | Status | How / gap |
 |---|---|---|---|---|
-| 3.5.1 | Identify users, processes, devices | Product | partial | Sessions are labeled per device. M1: user accounts, service identities. |
-| 3.5.2 | Authenticate users, processes, devices | Product | partial | scrypt password + pairing codes. M1: OIDC SSO (Entra ID incl. GCC High, Okta). |
-| 3.5.3 | Multifactor authentication | Product | planned M1 | WebAuthn/passkeys + TOTP; required for privileged roles. SSO installs inherit the IdP's MFA. |
-| 3.5.4 | Replay-resistant authentication | Product | partial | Random session tokens over TLS; CSRF tokens. M1: WebAuthn. |
-| 3.5.5 | Prevent reuse of identifiers | Shared | planned M1 | User ids are never reused; SCIM deprovisioning. |
-| 3.5.6 | Disable identifiers after inactivity | Shared | planned M1 | Dormant-account disable for local users; SSO installs rely on the IdP. |
+| 3.5.1 | Identify users, processes, devices | Product | partial | M1a: unique user accounts; sessions labeled per device and bound to a user; system actors (`worker`, `policy`, `mission`) are named. Gap: service identities for API clients (M1b). |
+| 3.5.2 | Authenticate users, processes, devices | Product | partial | scrypt password + second factor, pairing codes issued by an authenticated session to that same user. M1b: OIDC SSO (Entra ID incl. GCC High, Okta). |
+| 3.5.3 | Multifactor authentication | Product | in place | M1a: TOTP (RFC 6238) and WebAuthn passkeys, 10 single-use recovery codes (`security/mfa.py`). `JARVIS_MFA_POLICY=auto` requires it for every account in the remote profile (network access) and for owner/admin/approver locally; a session owing MFA reaches only enrollment. SSO installs will inherit the IdP's MFA (M1b). |
+| 3.5.4 | Replay-resistant authentication | Product | in place | M1a: WebAuthn challenges are single use; TOTP steps can't be reused (`last_step`); MFA challenges expire in 5 min; random session tokens over TLS; CSRF tokens. |
+| 3.5.5 | Prevent reuse of identifiers | Shared | partial | M1a: user ids are random and never reused; disabled accounts keep their username. Gap: SCIM deprovisioning (M1b). |
+| 3.5.6 | Disable identifiers after inactivity | Product | in place | M1a: an account unused for `JARVIS_DORMANT_DAYS` (default 90) is disabled at its next sign-in attempt (owners are exempt so an install can't lock itself out); an admin re-enables it. SSO installs will also rely on the IdP. |
 | 3.5.7 | Password complexity | Product | partial | 12-character minimum (M0). M1: breached-password check; SSO preferred. |
 | 3.5.8 | Prohibit password reuse | Product | planned M1 |  |
-| 3.5.9 | Temporary passwords | Product | planned M1 | Invite links instead of temporary passwords. |
+| 3.5.9 | Temporary passwords | Product | in place | M1a: no temporary passwords — single-use invite links (72 h, stored hashed) where the person sets their own; re-issuing voids the old link. |
 | 3.5.10 | Store/transmit only protected passwords | Product | in place | scrypt hashes; TLS in remote profile; tokens stored as SHA-256 hashes. |
 | 3.5.11 | Obscure authentication feedback | Product | in place | Password inputs masked; one generic 'Invalid credentials' message. |
 

@@ -53,6 +53,14 @@ JARVIS_TRUSTED_PROXIES=["127.0.0.1"]            # believe X-Forwarded-For from t
 - **Sessions:** a session ends after 7 days unused (`JARVIS_SESSION_IDLE_HOURS`) or 14 days in total
   (`JARVIS_SESSION_TTL_HOURS`). Settings → Security & devices lists every signed-in device with its address and can
   sign any of them out.
+- **People and the second step:** in remote mode every account must set up an authenticator app or passkey before
+  it can use JARVIS (`JARVIS_MFA_POLICY`: `auto` (default) | `privileged` | `all` | `off`; `auto` means `all` in
+  remote mode and owner/admin/approver otherwise). Passkeys belong to the exact host name you browse, so a passkey made
+  on `localhost` doesn't work on the ts.net address; authenticator apps work everywhere. Invite links use
+  `JARVIS_PUBLIC_ORIGIN`. Accounts unused for `JARVIS_DORMANT_DAYS` (default 90) are disabled (owners are exempt).
+  Lost access: `uv run jarvis reset-password --user <username>` on the host.
+- **Edition:** `JARVIS_EDITION=personal` (default) or `enterprise`. Enterprise hides personal-only connectors (Canvas,
+  Spotify, SimpleFIN, Home Assistant, routing) and turns on co-approval for org-wide changes.
 Keep `jarvis serve` bound to 127.0.0.1 and let the HTTPS front forward to it. Pair the phone from the desktop: Settings → Pair device shows an 8-character, 10-minute code; on the phone choose "Pair with a code". For Google OAuth over this origin, add `https://jarvis.<tailnet>.ts.net/api/integrations/google/callback` to the OAuth client's redirect URIs.
 
 **iPhone specifics:**

@@ -150,7 +150,7 @@ Fix the audit findings and set up the security program:
 | Milestone | State |
 |---|---|
 | M0 Security baseline | **landed** (session 10, 2026-10-05) — see `BUILD_STATUS.md` |
-| M1 Identity, RBAC, Postgres | next |
+| M1 Identity, RBAC, Postgres | **M1a landed** (session 11, 2026-10-06: users, roles, per-user isolation, MFA, co-approval); M1b SSO + SCIM next; M1c Postgres |
 | M2 Data protection, CUI boundary | planned |
 | M3 Overseer core | planned |
 | M4 Enterprise connectors | planned |

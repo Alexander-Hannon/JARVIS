@@ -292,4 +292,5 @@ def reset_user(conn, uid: str, by: str) -> None:
     conn.execute("DELETE FROM user_mfa WHERE user_id=?", (uid,))
     conn.execute("DELETE FROM mfa_recovery_codes WHERE user_id=?", (uid,))
     conn.execute("UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", (now_iso(), uid))
-    audit(conn, "user", "mfa.reset", "Second factors reset by an admin; sessions ended", "user", uid, uid=by)
+    who = "from the local CLI" if by == uid else "by an admin"
+    audit(conn, "user", "mfa.reset", f"Second factors reset {who}; sessions ended", "user", uid, uid=by)

@@ -22,6 +22,8 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("setup-key", help="Create the token-encryption key file if missing")
     rp = sub.add_parser("reset-password", help="Set a new password for a user (local shell only) and sign out their devices")
     rp.add_argument("--user", help="username (default: the first owner)")
+    rp.add_argument("--reset-mfa", action="store_true",
+                    help="also remove their second factors (lost phone and recovery codes); they enroll again")
     sub.add_parser("setup-token", help="Print a one-time first-run setup token (needed when setting up over HTTPS)")
     sub.add_parser("backup", help="Create a backup")
     rs = sub.add_parser("restore", help="Restore a backup (neutralizes jobs/approvals, disables schedules)")
@@ -94,9 +96,14 @@ def main(argv: list[str] | None = None) -> None:
         with connection() as conn, tx(conn):
             conn.execute("UPDATE users SET password_hash=? WHERE id=?", (hash_password(pw), u["id"]))
             conn.execute("UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", (now_iso(), u["id"]))
+            if a.reset_mfa:
+                # The break-glass path for a sole owner: only someone with a shell on the host can get here.
+                from jarvis.security import mfa
+                mfa.reset_user(conn, u["id"], u["id"])
             audit(conn, "user", "auth.password_reset", f"Password for {u['username']} reset from the local CLI; their "
                   "sessions were revoked", "user", u["id"], uid=u["id"])
-        print(f"Password updated for {u['username']}. Their devices were signed out; re-pair phones.")
+        print(f"Password updated for {u['username']}{' and second factors removed' if a.reset_mfa else ''}. "
+              "Their devices were signed out; re-pair phones.")
     elif a.cmd == "setup-token":
         if not _print_setup_token_if_needed():
             sys.exit("An owner already exists; setup tokens are only for first-run setup.")

@@ -240,3 +240,18 @@ def test_passkey_registration_and_sign_in(app, strict, conn):
                                                 "credential": dev.assert_(r2["webauthn"], "https://evil.example")},
                   headers=hdr)
     assert bad.status_code == 401
+
+
+def test_cli_break_glass_resets_password_and_second_factors(app, strict, monkeypatch):
+    """A sole owner who lost their phone and recovery codes gets back in only from a shell on the host."""
+    from jarvis import cli
+    api = _setup_owner(app)
+    _enroll_totp(api)
+    new = "a brand new passphrase"
+    monkeypatch.setattr("getpass.getpass", lambda _prompt="": new)
+    cli.main(["reset-password", "--user", "aj", "--reset-mfa"])
+    assert api.get("/api/auth/me").status_code == 401                 # every session ended
+    c, r = _login(app, password=new)
+    assert r.status_code == 200 and "mfa_required" not in r.json()     # no second factor left …
+    st = c.get("/api/auth/status").json()
+    assert st["mfa"] == {"required": True, "enrolled": False, "satisfied": False}   # … so enrollment comes first
