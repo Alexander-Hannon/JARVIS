@@ -19,42 +19,44 @@ _mail_cache: dict[str, tuple[float, dict]] = {}
 _route_cache: dict[str, tuple[float, float]] = {}
 
 
-def _mail(conn) -> dict | None:
-    if not A.connected_mailboxes(conn):
+def _mail(conn, uid: str) -> dict | None:
+    if not A.connected_mailboxes(conn, uid):
         return None
-    hit = _mail_cache.get("x")
+    hit = _mail_cache.get(uid)
     if hit and time.monotonic() - hit[0] < 600:
         return hit[1]
     from jarvis.mail import service as M
-    r = M.inbox(conn, unread_only=True, limit=25)
+    r = M.inbox(conn, uid, unread_only=True, limit=25)
     val = {"needs_reply": r["counts"].get("needs_reply", 0),
            "from": [i["from_name"] for i in r["items"] if i["category"] == "needs_reply"][:3]}
-    _mail_cache["x"] = (time.monotonic(), val)
+    _mail_cache[uid] = (time.monotonic(), val)
     return val
 
 
-def _leave_by(conn, snap: dict) -> dict | None:
-    if not A.app_connected(conn, "routing"):
+def _leave_by(conn, uid: str, snap: dict) -> dict | None:
+    if not A.app_connected(conn, uid, "routing"):
         return None
     now = utcnow()
     nxt = next((e for e in snap["agenda"] if not e["all_day"] and e.get("location") and parse_iso(e["start"]) > now
                 and parse_iso(e["start"]) - now < timedelta(hours=4)), None)
     if not nxt:
         return None
-    key = nxt["location"]
+    key = (uid, nxt["location"])         # routes start from each user's own home
     hit = _route_cache.get(key)
     if not hit or time.monotonic() - hit[0] > 1800:
         from jarvis.agents import weather as W
-        home = W.location(conn)
-        r = A.app_provider(conn, "routing")
-        dest = r.geocode(key, (home["lat"], home["lon"]))
+        home = W.location(conn, uid)
+        if not home:
+            return None
+        r = A.app_provider(conn, uid, "routing")
+        dest = r.geocode(nxt["location"], (home["lat"], home["lon"]))
         if not dest:
             return None
         hit = (time.monotonic(), r.route((home["lat"], home["lon"]), (dest["lat"], dest["lon"]))["minutes"])
         _route_cache[key] = hit
     minutes = hit[1]
     leave = parse_iso(nxt["start"]) - timedelta(minutes=round(minutes * 1.15) + 5)   # no live traffic: buffer
-    return {"event": nxt["summary"], "location": key, "drive_minutes": minutes, "leave_at": iso(leave)}
+    return {"event": nxt["summary"], "location": nxt["location"], "drive_minutes": minutes, "leave_at": iso(leave)}
 
 
 COURSE = re.compile(r"\b([A-Z]{2,4})[ -]?(\d{3})")
@@ -73,16 +75,17 @@ def day_label(d: date, today: date) -> str:
     return "today" if n == 0 else "tomorrow" if n == 1 else d.strftime("%a")
 
 
-def cards(conn) -> list[dict]:
-    snap = ctx.today(conn)
+def cards(conn, uid: str) -> list[dict]:
+    snap = ctx.today(conn, uid)
     tz = ZoneInfo(snap["tz"])
     out: list[dict] = []
-    pending = rows(conn, "SELECT id, title FROM proposals WHERE status='proposed' ORDER BY updated_at DESC LIMIT 5")
+    pending = rows(conn, "SELECT id, title FROM proposals WHERE user_id=? AND status='proposed' ORDER BY updated_at DESC "
+                         "LIMIT 5", (uid,))
     if pending:
         out.append({"kind": "approvals", "tone": "attention", "title": f"{len(pending)} waiting for your approval",
                     "detail": "; ".join(p["title"] for p in pending[:3]), "link": "/actions"})
     try:
-        lb = _leave_by(conn, snap)
+        lb = _leave_by(conn, uid, snap)
     except Exception:  # noqa: BLE001 — a routing hiccup must not break Today
         lb = None
     if lb:
@@ -108,27 +111,31 @@ def cards(conn) -> list[dict]:
                     "detail": f"{due_first} due {day_label(first, today)}" + (f", {len(dls) - 4} more later" if len(dls) > 4 else ""),
                     "items": items, "link": "/missions"})
     try:
-        m = _mail(conn)
+        m = _mail(conn, uid)
     except Exception:  # noqa: BLE001
         m = {"error": True}
     if m and m.get("needs_reply"):
         out.append({"kind": "email", "tone": "info", "title": f"{m['needs_reply']} email(s) may need a reply",
                     "detail": ", ".join(m["from"]), "link": "/inbox"})
-    found = rows(conn, "SELECT title, body FROM notifications WHERE kind='mission' AND read_at IS NULL "
-                       "ORDER BY created_at DESC LIMIT 2")
+    found = rows(conn, "SELECT title, body FROM notifications WHERE user_id=? AND kind='mission' AND read_at IS NULL "
+                       "ORDER BY created_at DESC LIMIT 2", (uid,))
     for f in found:
         out.append({"kind": "mission", "tone": "info", "title": f["title"], "detail": f["body"][:220], "link": "/missions"})
     return out
 
 
-def weekly_report(conn) -> dict:
+def weekly_report(conn, uid: str) -> dict:
     since = iso(utcnow() - timedelta(days=7))
-    q = lambda sql: conn.execute(sql, (since,)).fetchone()[0]  # noqa: E731
-    verified = q("SELECT COUNT(*) FROM proposed_actions WHERE state='verified' AND updated_at>=?")
-    auto = q("SELECT COUNT(*) FROM approvals WHERE channel='policy' AND created_at>=?")
-    missions = q("SELECT COUNT(*) FROM mission_runs WHERE started_at>=? AND status IN ('done','nothing_new')")
-    commands = q("SELECT COUNT(*) FROM runs WHERE kind='command' AND started_at>=?")
-    spend = q("SELECT COALESCE(SUM(u.cost_usd),0) FROM usage_records u WHERE u.created_at>=?")
+    q = lambda sql: conn.execute(sql, (uid, since)).fetchone()[0]  # noqa: E731
+    owned = ("JOIN proposal_versions v ON v.id=a.proposal_version_id JOIN proposals p ON p.id=v.proposal_id "
+             "WHERE p.user_id=?")
+    verified = q(f"SELECT COUNT(*) FROM proposed_actions a {owned} AND a.state='verified' AND a.updated_at>=?")  # nosec B608 fixed clause
+    auto = q("SELECT COUNT(*) FROM approvals WHERE approved_by=? AND channel='policy' AND created_at>=?")
+    missions = q("SELECT COUNT(*) FROM mission_runs r JOIN missions m ON m.id=r.mission_id WHERE m.user_id=? "
+                 "AND r.started_at>=? AND r.status IN ('done','nothing_new')")
+    commands = q("SELECT COUNT(*) FROM runs WHERE user_id=? AND kind='command' AND started_at>=?")
+    spend = q("SELECT COALESCE(SUM(u.cost_usd),0) FROM usage_records u JOIN usage_reservations r ON r.id=u.reservation_id "
+              "WHERE r.user_id=? AND u.created_at>=?")
     # A rough, stated estimate: ~2 min saved per completed action, ~3 per mission run, ~1 per answered command.
     minutes = verified * 2 + missions * 3 + commands
     return {"commands": commands, "actions_done": verified, "auto_approved": auto, "mission_runs": missions,

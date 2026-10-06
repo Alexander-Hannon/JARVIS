@@ -14,6 +14,8 @@ for _k in [k for k in os.environ if k.startswith("JARVIS_") and k != "JARVIS_ENV
 import pytest
 
 PASSWORD = "correct horse battery"
+USERNAME = "aj"
+OWNER = "usr_owner"
 LOOPBACK = ("127.0.0.1", 50000)   # a direct local client (TestClient's default peer name is not loopback)
 
 
@@ -85,13 +87,13 @@ class Api:
 def client(app):
     from fastapi.testclient import TestClient
     c = TestClient(app, client=LOOPBACK)
-    r = c.post("/api/auth/setup", json={"password": PASSWORD})
+    r = c.post("/api/auth/setup", json={"username": USERNAME, "password": PASSWORD, "display_name": "AJ"})
     assert r.status_code == 200, r.text
     return Api(c, r.json()["csrf_token"])
 
 
 @pytest.fixture
-def fakes(conn):
+def fakes(client, conn):
     """Connected Todoist + Google Calendar accounts backed by contract fakes, with explicit grants."""
     from jarvis.integrations import accounts as A
     from jarvis.integrations.fakes import FakeGoogleCalendar, FakeTodoist
@@ -99,9 +101,10 @@ def fakes(conn):
     A.set_override("todoist", td)
     A.set_override("google_calendar", gc)
     conn.execute("BEGIN")
-    tid = A.upsert_account(conn, "todoist", "aj@example.test (SIMULATED)", "fake-token", "api_token", external_account_id="u1")
+    tid = A.upsert_account(conn, OWNER, "todoist", "aj@example.test (SIMULATED)", "fake-token", "api_token",
+                           external_account_id="u1")
     A.set_grants(conn, tid, "todoist_project", "write", [("proj-jarvis", "Jarvis")], default_target="proj-jarvis")
-    gid = A.upsert_account(conn, "google", "aj@example.test (SIMULATED)", json.dumps({"access_token": "x"}), "oauth_tokens",
+    gid = A.upsert_account(conn, OWNER, "google", "aj@example.test (SIMULATED)", json.dumps({"access_token": "x"}), "oauth_tokens",
                            external_account_id="aj@example.test", config={"purposes": ["calendar"]})
     A.set_grants(conn, gid, "calendar", "read", [("primary", "AJ")])
     A.set_grants(conn, gid, "calendar", "write", [("primary", "AJ")], default_target="primary")

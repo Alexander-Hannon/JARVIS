@@ -37,13 +37,13 @@ def test_ics_refresh_classifies_with_confirmed_mappings_and_hides_url(client, co
     from jarvis.integrations import service
     conn.execute("UPDATE course_mappings SET confirmed=1 WHERE pattern IN ('MKT 601','IS 640')")
     with pytest.raises(service.SetupError):
-        service.connect_ics(conn, "http://insecure.example/x.ics")
+        service.connect_ics(conn, "usr_owner", "http://insecure.example/x.ics")
     from jarvis.integrations import accounts as A
     conn.execute("BEGIN")
-    A.upsert_account(conn, "ics", "Deadline feed", "https://feeds.example.com/private_TOKEN.ics", "ics_url",
+    A.upsert_account(conn, "usr_owner", "ics", "Deadline feed", "https://feeds.example.com/private_TOKEN.ics", "ics_url",
                      external_account_id="ics-feed")
     conn.execute("COMMIT")
-    res = service.ics_refresh(conn, fetcher=lambda url: ICS)
+    res = service.ics_refresh(conn, "usr_owner", fetcher=lambda url: ICS)
     assert res["added"] == 3
     d = {x["summary"]: x for x in client.get("/api/deadlines").json()}
     assert d["MKT 601 Case 2 due"]["role"] == "own" and d["MKT 601 Case 2 due"]["all_day"] == 1
@@ -55,7 +55,7 @@ def test_ics_refresh_classifies_with_confirmed_mappings_and_hides_url(client, co
     assert today["sources"]["deadlines"]["status"] == "ok"
     # failure keeps last good data and is visible
     with pytest.raises(service.SetupError):
-        service.ics_refresh(conn, fetcher=lambda url: (_ for _ in ()).throw(TimeoutError()))
+        service.ics_refresh(conn, "usr_owner", fetcher=lambda url: (_ for _ in ()).throw(TimeoutError()))
     assert client.get("/api/today").json()["sources"]["deadlines"]["status"] in ("stale", "unavailable")
     assert len(client.get("/api/deadlines").json()) == 3
 
@@ -73,7 +73,7 @@ def test_todoist_sync_reconciles_external_changes(client, fakes, conn):
     ids = [i["external_id"] for i in client.get(f"/api/proposals/{p['id']}").json()["items"]]
     fakes["todoist"].external_complete(ids[0])
     fakes["todoist"].external_delete(ids[1])
-    out = service.todoist_sync(conn)
+    out = service.todoist_sync(conn, "usr_owner")
     assert out["reconciled"] == 2
     st = {r["external_id"]: r["status"] for r in conn.execute("SELECT external_id, status FROM task_links")}
     assert st == {ids[0]: "completed", ids[1]: "deleted"}
@@ -160,14 +160,14 @@ def test_drive_selected_roots_only(client, conn):
     from jarvis.integrations import service
     A.set_override("google_drive", FakeDrive())
     conn.execute("BEGIN")
-    A.upsert_account(conn, "google", "aj@example.test", '{"access_token":"x"}', "oauth_tokens", external_account_id="aj@example.test",
+    A.upsert_account(conn, "usr_owner", "google", "aj@example.test", '{"access_token":"x"}', "oauth_tokens", external_account_id="aj@example.test",
                      config={"purposes": ["drive"]})
     conn.execute("COMMIT")
     client.post("/api/integrations/drive/roots", {"ids": ["fold1"]})
-    ok = service.drive_ingest(conn, "doc1")
+    ok = service.drive_ingest(conn, "usr_owner", "doc1")
     assert ok["status"] in ("processed", "partial") and ok["title"].startswith("Rubric")
     with pytest.raises(service.SetupError):
-        service.drive_ingest(conn, "doc2")
+        service.drive_ingest(conn, "usr_owner", "doc2")
     hits = client.get("/api/search?q=clarity").json()
     assert hits and hits[0]["title"].startswith("Rubric")
 
@@ -203,7 +203,7 @@ def test_gzip_feed_and_url_never_logged(client, conn, caplog):
     freeze(CHICAGO_AFTERNOON)
     url = "https://uah.instructure.com/feeds/calendars/user_SECRETTOKEN123.ics"
     conn.execute("BEGIN")
-    A.upsert_account(conn, "ics", "Deadline feed", url, "ics_url", external_account_id="ics-feed")
+    A.upsert_account(conn, "usr_owner", "ics", "Deadline feed", url, "ics_url", external_account_id="ics-feed")
     conn.execute("COMMIT")
     caplog.set_level(logging.INFO)
     with respx.mock() as m:
@@ -214,7 +214,7 @@ def test_gzip_feed_and_url_never_logged(client, conn, caplog):
         real = netguard.resolve_public
         netguard.resolve_public = lambda host, port, resolver=None: "93.184.216.34"     # skip DNS in tests
         try:
-            res = service.ics_refresh(conn)
+            res = service.ics_refresh(conn, "usr_owner")
         finally:
             netguard.resolve_public = real
     assert route.calls[0].request.headers["host"] == "uah.instructure.com"
@@ -252,8 +252,8 @@ def test_gmail_on_a_different_google_account_never_touches_calendar(client, conn
     reset_settings_cache()
     _google_flow(client, monkeypatch, "calendar", "aj@uah.example")
     cal = conn.execute("SELECT id FROM integration_accounts WHERE provider='google'").fetchone()["id"]
-    conn.execute("INSERT INTO scope_grants (id, account_id, resource_type, resource_id, access, created_at) VALUES "
-                 "('g1', ?, 'calendar', 'primary', 'write', 'now')", (cal,))
+    conn.execute("INSERT INTO scope_grants (id, user_id, account_id, resource_type, resource_id, access, created_at) VALUES "
+                 "('g1', 'usr_owner', ?, 'calendar', 'primary', 'write', 'now')", (cal,))
     _, r = _google_flow(client, monkeypatch, "gmail", "aj.personal@gmail.example")
     assert r.headers["location"] == "/connections?connected=google"
     rows = {x["provider"]: x for x in conn.execute("SELECT provider, label, status, id FROM integration_accounts")}

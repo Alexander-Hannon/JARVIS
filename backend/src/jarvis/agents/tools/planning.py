@@ -25,9 +25,9 @@ def _day(s: str) -> date:
 def get_today_overview(run):
     from jarvis.agents import visuals as V
     run_event(run.conn, run.run_id, "tool", "Reading today's calendar, tasks and deadlines")
-    snap = ctx.today(run.conn)
+    snap = ctx.today(run.conn, run.uid)
     d0 = date.fromisoformat(snap["date"])
-    run.visuals.setdefault(f"cal:{d0}:1", V.calendar(run.conn, d0, 1, run.tz))
+    run.visuals.setdefault(f"cal:{d0}:1", V.calendar(run.conn, run.uid, d0, 1, run.tz))
     if snap["tasks_due"] or snap["overdue"]:
         run.visuals["tasks:today"] = V.tasks(snap["overdue"] + snap["tasks_due"], "Due today & overdue")
     return {"date": snap["date"], "plan": snap["plan"],
@@ -48,9 +48,9 @@ def get_calendar(run, start_date: str, days: int = 1):
     n = max(1, min(days, 14))
     start = ctx.day_bounds(d0, run.tz)[0]
     end = ctx.day_bounds(d0 + timedelta(days=n - 1), run.tz)[1]
-    cal = ctx.events_between(run.conn, start, end, force=True)
+    cal = ctx.events_between(run.conn, run.uid, start, end, force=True)
     zi = ZoneInfo(run.tz)
-    run.visuals[f"cal:{d0}:{n}"] = V.calendar(run.conn, d0, min(n, 7), run.tz, cal)
+    run.visuals[f"cal:{d0}:{n}"] = V.calendar(run.conn, run.uid, d0, min(n, 7), run.tz, cal)
 
     def loc(s, all_day):
         return s if all_day else datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(zi).strftime("%a %b %-d %-I:%M %p")
@@ -65,7 +65,7 @@ def get_calendar(run, start_date: str, days: int = 1):
       risk="read", family="calendar", example="When am I free for two hours tomorrow afternoon?")
 def find_free_time(run, date: str, minutes: int, part_of_day: str | None = None):
     run_event(run.conn, run.run_id, "tool", "Checking your free time")
-    r = ctx.free_slots(run.conn, _day(date), minutes, part_of_day, run.tz)
+    r = ctx.free_slots(run.conn, run.uid, _day(date), minutes, part_of_day, run.tz)
     if r.get("slots"):
         from jarvis.agents import visuals as V
         run.visuals[f"slots:{date}"] = V.slots(_day(date), minutes, r["slots"])
@@ -77,7 +77,7 @@ def find_free_time(run, date: str, minutes: int, part_of_day: str | None = None)
       risk="read", family="tasks", example="What's left on my to-do list this week?")
 def list_tasks(run, query: str | None = None, due_on_or_before: str | None = None):
     run_event(run.conn, run.run_id, "tool", "Reading your Todoist tasks")
-    snap = ctx.tasks_snapshot(run.conn)
+    snap = ctx.tasks_snapshot(run.conn, run.uid)
     tasks = snap["tasks"]
     if query:
         tasks = [t for t in tasks if memory.similarity(t["content"], query) > 0.2 or query.lower() in t["content"].lower()]
@@ -97,18 +97,20 @@ def list_tasks(run, query: str | None = None, due_on_or_before: str | None = Non
       risk="read", family="school_gta", example="Any deadlines coming up in the next two weeks?")
 def get_deadlines(run, days: int = 7):
     run_event(run.conn, run.run_id, "tool", "Reading course deadlines")
-    dl = ctx.deadlines_snapshot(run.conn, ctx.local_today(run.conn), days)
+    dl = ctx.deadlines_snapshot(run.conn, run.uid, ctx.local_today(run.conn, run.uid), days)
     return {"status": dl["status"], "note": dl.get("note"),
             "items": [{k: d[k] for k in ("summary", "local_date", "course", "role")} for d in dl["items"]]}
 
 
-@tool("get_weather", "Daily forecast for AJ's location (default Huntsville, AL) for a date within the next 7 days.",
+@tool("get_weather", "Daily forecast for the user's location for a date within the next 7 days.",
       obj({"date": {"type": "string", "description": "YYYY-MM-DD"}}, ["date"]),
       risk="read", family="weather", example="Do I need an umbrella tomorrow?")
 def get_weather(run, date: str):
     from jarvis.agents import visuals as V
     from jarvis.agents import weather as W
-    loc = W.location(run.conn)
+    loc = W.location(run.conn, run.uid)
+    if not loc:
+        return {"error": "No location set. Add one in Settings → Account to get forecasts."}
     run_event(run.conn, run.run_id, "tool", f"Checking the forecast for {loc['name']}")
     try:
         data = W.fetch(loc, run.tz)
@@ -123,7 +125,7 @@ def get_weather(run, date: str):
       obj({}), risk="read", family="school_gta", example="What should I work on during my GTA shift?")
 def gta_shift_plan(run):
     run_event(run.conn, run.run_id, "tool", "Building your GTA-shift queue")
-    r = S.gta_queue(run.conn)
+    r = S.gta_queue(run.conn, run.uid)
     return {"plan": r["text"], "preference": r.get("basis")}
 
 
@@ -131,7 +133,7 @@ def gta_shift_plan(run):
       obj({"area": {"type": "string", "enum": AREAS}}, ["area"]),
       risk="read", family="chief", example="Where do things stand with the business?")
 def project_summary(run, area: str):
-    return {"summary": S.area_summary(run.conn, area)}
+    return {"summary": S.area_summary(run.conn, run.uid, area)}
 
 
 @tool("generate_briefing", "Generate the Daily Command, Nightly Debrief or Weekly War Room briefing.",
@@ -140,7 +142,7 @@ def project_summary(run, area: str):
 def generate_briefing(run, kind: str):
     from jarvis.briefings import workflows
     run_event(run.conn, run.run_id, "tool", f"Generating {kind.replace('_', ' ')}")
-    b = workflows.generate(run.conn, kind, run_id=run.run_id)
+    b = workflows.generate(run.conn, run.uid, kind, run_id=run.run_id)
     return {"briefing": workflows.render_text(b)}
 
 
@@ -148,7 +150,9 @@ def generate_briefing(run, kind: str):
       obj({}), risk="read", family="chief", example="Did that calendar block actually get added?")
 def recent_actions(run):
     acts = rows(run.conn, "SELECT a.expected_effect, a.state, a.external_url, a.updated_at FROM proposed_actions a "
-                          "WHERE a.state NOT IN ('superseded','skipped') ORDER BY a.updated_at DESC LIMIT 12")
+                          "JOIN proposal_versions v ON v.id=a.proposal_version_id JOIN proposals p ON p.id=v.proposal_id "
+                          "WHERE p.user_id=? AND a.state NOT IN ('superseded','skipped') ORDER BY a.updated_at DESC LIMIT 12",
+                (run.uid,))
     return {"actions": acts}
 
 
@@ -156,4 +160,4 @@ def recent_actions(run):
       obj({}), risk="read", family="github", example="Any open PRs on my repos?")
 def github_status(run):
     from jarvis.integrations.service import github_status as gs
-    return {"repos": gs(run.conn) or "GitHub not connected"}
+    return {"repos": gs(run.conn, run.uid) or "GitHub not connected"}

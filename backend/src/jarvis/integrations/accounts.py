@@ -1,7 +1,12 @@
 """Integration accounts, scope grants and provider construction.
 
+Accounts are personal: each row belongs to one user, and every lookup is by (user, provider). Connecting a provider
+replaces only *your own* previous account for it; an external account already connected by someone else is refused
+rather than taken over. Org-level accounts (the Anthropic key, the Telegram bot) have no user and are managed by admins.
+
 Scope is enforced at the application layer in addition to provider OAuth scopes:
-the executor only writes to a resource that has an explicit `write` grant on the same account.
+the executor only writes to a resource that has an explicit `write` grant on the same account, and only for the
+account's own user.
 """
 from __future__ import annotations
 
@@ -14,42 +19,75 @@ from jarvis.core.db import jdump, jload, row, rows
 from jarvis.core.util import audit, new_id, now_iso
 from jarvis.security import secrets
 
-# Test/contract overrides: provider name -> adapter instance (e.g. fakes). Labeled simulated.
-_overrides: dict[str, Any] = {}
+ORG_PROVIDERS = frozenset({"anthropic", "telegram"})
+OWNER = "usr_owner"
+
+# Test/contract overrides: (user, provider) -> adapter instance (e.g. fakes). Labeled simulated. They apply to one
+# user (the first owner unless given), so multi-user tests prove another user does NOT get the fake.
+_overrides: dict[tuple[str, str], Any] = {}
 
 
-def set_override(provider: str, adapter: Any | None) -> None:
+def _okey(uid: str | None, provider: str) -> tuple[str, str]:
+    return ("" if provider in ORG_PROVIDERS else (uid or ""), provider)
+
+
+def set_override(provider: str, adapter: Any | None, uid: str = OWNER) -> None:
     if adapter is None:
-        _overrides.pop(provider, None)
+        _overrides.pop(_okey(uid, provider), None)
     else:
-        _overrides[provider] = adapter
+        _overrides[_okey(uid, provider)] = adapter
 
 
 def clear_overrides() -> None:
     _overrides.clear()
 
 
-def get_account(conn: sqlite3.Connection, provider: str) -> dict | None:
-    r = row(conn, "SELECT * FROM integration_accounts WHERE provider=? AND status!='revoked' ORDER BY created_at DESC LIMIT 1",
-            (provider,))
+def _override(uid: str | None, provider: str) -> Any | None:
+    return _overrides.get(_okey(uid, provider))
+
+
+class AccountInUse(Exception):
+    """The external account is already connected by another user of this install."""
+
+
+def _decode(r: dict | None) -> dict | None:
     if r:
         r["config"] = jload(r["config"], {})
         r["scopes"] = jload(r["scopes"], [])
     return r
 
 
-def get_account_by_id(conn: sqlite3.Connection, account_id: str) -> dict | None:
-    r = row(conn, "SELECT * FROM integration_accounts WHERE id=?", (account_id,))
-    if r:
-        r["config"] = jload(r["config"], {})
-        r["scopes"] = jload(r["scopes"], [])
-    return r
+def get_account(conn: sqlite3.Connection, uid: str, provider: str) -> dict | None:
+    if provider in ORG_PROVIDERS:
+        return org_account(conn, provider)
+    return _decode(row(conn, "SELECT * FROM integration_accounts WHERE user_id=? AND provider=? AND status!='revoked' "
+                             "ORDER BY created_at DESC LIMIT 1", (uid, provider)))
 
 
-def upsert_account(conn: sqlite3.Connection, provider: str, label: str, secret: str | None, secret_kind: str | None,
-                   external_account_id: str | None = None, scopes: list[str] | None = None,
+def org_account(conn: sqlite3.Connection, provider: str) -> dict | None:
+    return _decode(row(conn, "SELECT * FROM integration_accounts WHERE user_id IS NULL AND provider=? "
+                             "AND status!='revoked' ORDER BY created_at DESC LIMIT 1", (provider,)))
+
+
+def get_account_by_id(conn: sqlite3.Connection, account_id: str, uid: str | None = None) -> dict | None:
+    """With `uid`, only that user's account (None for anyone else's — callers answer 404)."""
+    if uid is None:
+        return _decode(row(conn, "SELECT * FROM integration_accounts WHERE id=?", (account_id,)))
+    return _decode(row(conn, "SELECT * FROM integration_accounts WHERE id=? AND user_id=?", (account_id, uid)))
+
+
+def list_accounts(conn: sqlite3.Connection, uid: str) -> list[dict]:
+    """The user's own accounts plus org-level ones (shown read-only to non-admins)."""
+    return [_decode(r) for r in rows(conn, "SELECT * FROM integration_accounts WHERE user_id=? OR user_id IS NULL "
+                                           "ORDER BY created_at", (uid,))]
+
+
+def upsert_account(conn: sqlite3.Connection, uid: str | None, provider: str, label: str, secret: str | None,
+                   secret_kind: str | None, external_account_id: str | None = None, scopes: list[str] | None = None,
                    config: dict | None = None, status: str = "connected") -> str:
-    existing = get_account(conn, provider)
+    if (uid is None) != (provider in ORG_PROVIDERS):
+        raise ValueError(f"{provider}: {'org' if provider in ORG_PROVIDERS else 'personal'} account expected")
+    existing = org_account(conn, provider) if uid is None else get_account(conn, uid, provider)
     now = now_iso()
     enc = secrets.encrypt(secret) if secret is not None else None
     if existing and (existing["external_account_id"] == external_account_id or external_account_id is None
@@ -62,20 +100,31 @@ def upsert_account(conn: sqlite3.Connection, provider: str, label: str, secret: 
             (label, external_account_id, status, enc, secret_kind, jdump(scopes if scopes is not None else existing["scopes"]),
              jdump(cfg), now, existing["id"]))
         aid = existing["id"]
-        if existing["external_account_id"] and external_account_id and existing["external_account_id"] != external_account_id:
-            pass
     else:
         if existing:
-            # A different external account replaces the old one: old grants are dropped so writes
-            # can never silently move to another account.
+            # A different external account replaces *this user's* old one: old grants are dropped so writes can never
+            # silently move to another account.
             conn.execute("UPDATE integration_accounts SET status='revoked', updated_at=? WHERE id=?", (now, existing["id"]))
             conn.execute("DELETE FROM scope_grants WHERE account_id=?", (existing["id"],))
-        aid = new_id("acct")
-        conn.execute(
-            "INSERT INTO integration_accounts (id, provider, label, external_account_id, status, secret_ciphertext, secret_kind, "
-            "scopes, config, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (aid, provider, label, external_account_id, status, enc, secret_kind, jdump(scopes or []), jdump(config or {}), now, now))
-    audit(conn, "user", "integration.connected", f"{provider} connected ({label})", "integration_account", aid)
+        taken = row(conn, "SELECT id, user_id, status FROM integration_accounts WHERE provider=? AND external_account_id=?",
+                    (provider, external_account_id)) if external_account_id else None
+        if taken and taken["status"] != "revoked" and taken["user_id"] != uid:
+            raise AccountInUse(f"That {provider} account is already connected by another user.")
+        if taken:
+            # Same external account reconnecting (or a revoked row being reused): start clean for the new owner.
+            conn.execute("DELETE FROM scope_grants WHERE account_id=?", (taken["id"],))
+            conn.execute("UPDATE integration_accounts SET user_id=?, label=?, status=?, secret_ciphertext=?, secret_kind=?, "
+                         "scopes=?, config=?, last_error=NULL, updated_at=?, version=version+1 WHERE id=?",
+                         (uid, label, status, enc, secret_kind, jdump(scopes or []), jdump(config or {}), now, taken["id"]))
+            aid = taken["id"]
+        else:
+            aid = new_id("acct")
+            conn.execute(
+                "INSERT INTO integration_accounts (id, user_id, provider, label, external_account_id, status, "
+                "secret_ciphertext, secret_kind, scopes, config, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (aid, uid, provider, label, external_account_id, status, enc, secret_kind, jdump(scopes or []),
+                 jdump(config or {}), now, now))
+    audit(conn, "user", "integration.connected", f"{provider} connected ({label})", "integration_account", aid, uid=uid)
     return aid
 
 
@@ -100,12 +149,13 @@ def mark_synced(conn: sqlite3.Connection, account_id: str) -> None:
                  (now_iso(), account_id))
 
 
-def disconnect(conn: sqlite3.Connection, account_id: str) -> None:
+def disconnect(conn: sqlite3.Connection, account_id: str, by: str | None = None) -> None:
+    """The caller has already checked the account belongs to `by` (or `by` is an admin for org accounts)."""
     conn.execute("UPDATE integration_accounts SET status='revoked', secret_ciphertext=NULL, updated_at=? WHERE id=?",
                  (now_iso(), account_id))
     conn.execute("DELETE FROM scope_grants WHERE account_id=?", (account_id,))
     audit(conn, "user", "integration.disconnected", "Integration disconnected; stored secret erased",
-          "integration_account", account_id)
+          "integration_account", account_id, uid=by)
 
 
 # ---------- grants ----------
@@ -123,14 +173,18 @@ def grants(conn: sqlite3.Connection, account_id: str, resource_type: str | None 
 
 def set_grants(conn: sqlite3.Connection, account_id: str, resource_type: str, access: str,
                resources: list[tuple[str, str | None]], default_target: str | None = None) -> None:
+    owner = row(conn, "SELECT user_id FROM integration_accounts WHERE id=?", (account_id,))
+    if not owner or owner["user_id"] is None:
+        raise ValueError("grants belong to a personal account")
     conn.execute("DELETE FROM scope_grants WHERE account_id=? AND resource_type=? AND access=?",
                  (account_id, resource_type, access))
     for rid, name in resources:
         conn.execute("INSERT INTO scope_grants (id, account_id, resource_type, resource_id, resource_name, access, "
-                     "is_default_target, created_at) VALUES (?,?,?,?,?,?,?,?)",
-                     (new_id("grant"), account_id, resource_type, rid, name, access, int(rid == default_target), now_iso()))
+                     "is_default_target, created_at, user_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                     (new_id("grant"), account_id, resource_type, rid, name, access, int(rid == default_target), now_iso(),
+                      owner["user_id"]))
     audit(conn, "user", "integration.scope_changed", f"{resource_type} {access} grants set ({len(resources)})",
-          "integration_account", account_id, {"resources": [r[0] for r in resources]})
+          "integration_account", account_id, {"resources": [r[0] for r in resources]}, uid=owner["user_id"])
 
 
 def has_grant(conn: sqlite3.Connection, account_id: str, resource_type: str, resource_id: str, access: str) -> bool:
@@ -150,10 +204,10 @@ class NotConnected(Exception):
         self.provider = provider
 
 
-def task_provider(conn: sqlite3.Connection):
-    if "todoist" in _overrides:
-        return _overrides["todoist"]
-    acct = get_account(conn, "todoist")
+def task_provider(conn: sqlite3.Connection, uid: str):
+    if (o := _override(uid, "todoist")) is not None:
+        return o
+    acct = get_account(conn, uid, "todoist")
     if not acct or acct["status"] not in ("connected", "error"):
         raise NotConnected("todoist", "Connect it in Settings → Integrations.")
     from jarvis.integrations.todoist import TodoistAdapter
@@ -176,30 +230,30 @@ def _google_credentials(conn: sqlite3.Connection, acct: dict):
                              token_updater=updater)
 
 
-def calendar_provider(conn: sqlite3.Connection):
-    if "google_calendar" in _overrides:
-        return _overrides["google_calendar"]
-    acct = get_account(conn, "google")
+def calendar_provider(conn: sqlite3.Connection, uid: str):
+    if (o := _override(uid, "google_calendar")) is not None:
+        return o
+    acct = get_account(conn, uid, "google")
     if not acct or acct["status"] not in ("connected", "error") or "calendar" not in acct["config"].get("purposes", []):
         raise NotConnected("google_calendar", "Connect Google Calendar in Settings → Integrations.")
     from jarvis.integrations.google_calendar import GoogleCalendarAdapter
     return GoogleCalendarAdapter(_google_credentials(conn, acct))
 
 
-def drive_provider(conn: sqlite3.Connection):
-    if "google_drive" in _overrides:
-        return _overrides["google_drive"]
-    acct = get_account(conn, "google")
+def drive_provider(conn: sqlite3.Connection, uid: str):
+    if (o := _override(uid, "google_drive")) is not None:
+        return o
+    acct = get_account(conn, uid, "google")
     if not acct or "drive" not in acct["config"].get("purposes", []):
         raise NotConnected("google_drive", "Connect Google Drive in Settings → Integrations.")
     from jarvis.integrations.google_drive import GoogleDriveAdapter
     return GoogleDriveAdapter(_google_credentials(conn, acct))
 
 
-def github_provider(conn: sqlite3.Connection):
-    if "github" in _overrides:
-        return _overrides["github"]
-    acct = get_account(conn, "github")
+def github_provider(conn: sqlite3.Connection, uid: str):
+    if (o := _override(uid, "github")) is not None:
+        return o
+    acct = get_account(conn, uid, "github")
     if not acct:
         raise NotConnected("github")
     from jarvis.integrations.github import GitHubAdapter
@@ -216,16 +270,16 @@ MAILBOXES = ("gmail", "outlook")
 _MAIL_ACCOUNT = {"gmail": ("gmail", "mail"), "outlook": ("microsoft", "mail")}
 
 
-def mail_account(conn: sqlite3.Connection, box: str) -> dict | None:
+def mail_account(conn: sqlite3.Connection, uid: str, box: str) -> dict | None:
     provider, purpose = _MAIL_ACCOUNT[box]
-    acct = get_account(conn, provider)
+    acct = get_account(conn, uid, provider)
     if acct and purpose in acct["config"].get("purposes", []):
         return acct
     return None
 
 
-def connected_mailboxes(conn: sqlite3.Connection) -> list[str]:
-    return [b for b in MAILBOXES if b in _overrides or mail_account(conn, b)]
+def connected_mailboxes(conn: sqlite3.Connection, uid: str) -> list[str]:
+    return [b for b in MAILBOXES if _override(uid, b) is not None or mail_account(conn, uid, b)]
 
 
 def _microsoft_credentials(conn: sqlite3.Connection, acct: dict):
@@ -244,10 +298,10 @@ def _microsoft_credentials(conn: sqlite3.Connection, acct: dict):
                                 token_updater=updater)
 
 
-def mail_provider(conn: sqlite3.Connection, box: str):
-    if box in _overrides:
-        return _overrides[box]
-    acct = mail_account(conn, box)
+def mail_provider(conn: sqlite3.Connection, uid: str, box: str):
+    if (o := _override(uid, box)) is not None:
+        return o
+    acct = mail_account(conn, uid, box)
     if not acct or acct["status"] not in ("connected", "error"):
         raise NotConnected(box, "Connect it in Settings → Integrations.")
     if box == "gmail":
@@ -261,10 +315,10 @@ def mail_provider(conn: sqlite3.Connection, box: str):
 APP_PROVIDERS = ("notion", "slack", "canvas", "spotify", "homeassistant", "routing", "simplefin")
 
 
-def app_provider(conn: sqlite3.Connection, provider: str):
-    if provider in _overrides:
-        return _overrides[provider]
-    acct = get_account(conn, provider)
+def app_provider(conn: sqlite3.Connection, uid: str, provider: str):
+    if (o := _override(uid, provider)) is not None:
+        return o
+    acct = get_account(conn, uid, provider)
     if not acct or acct["status"] not in ("connected", "error"):
         raise NotConnected(provider, "Connect it in Settings → Integrations.")
     secret, cfg = read_secret(acct), acct["config"]
@@ -300,8 +354,8 @@ def app_provider(conn: sqlite3.Connection, provider: str):
     raise NotConnected(provider, "Unknown provider.")
 
 
-def app_connected(conn: sqlite3.Connection, provider: str) -> bool:
-    if provider in _overrides:
+def app_connected(conn: sqlite3.Connection, uid: str, provider: str) -> bool:
+    if _override(uid, provider) is not None:
         return True
-    acct = get_account(conn, provider)
+    acct = get_account(conn, uid, provider)
     return bool(acct and acct["status"] in ("connected", "error"))

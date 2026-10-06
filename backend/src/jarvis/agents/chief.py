@@ -31,6 +31,7 @@ RUN_LIMITS = {"max_specialists": 3, "max_model_calls": 3, "max_seconds": 90}
 
 @dataclass
 class CommandInput:
+    user_id: str                 # who is speaking: every read, proposal and memory is scoped to this user
     conversation_id: str
     text: str
     channel: str                 # voice | typed
@@ -62,18 +63,23 @@ class Reply:
         self.text_lines.append(s)
 
 
-def ensure_conversation(conn, conversation_id: str | None) -> str:
-    if conversation_id and row(conn, "SELECT id FROM conversations WHERE id=?", (conversation_id,)):
+def ensure_conversation(conn, uid: str, conversation_id: str | None) -> str:
+    if conversation_id and row(conn, "SELECT id FROM conversations WHERE id=? AND user_id=?", (conversation_id, uid)):
         return conversation_id
-    cid = conversation_id if conversation_id and re.fullmatch(r"conv_[a-f0-9]{20}", conversation_id) else new_id("conv")
-    conn.execute("INSERT INTO conversations (id, created_at, updated_at) VALUES (?,?,?)", (cid, now_iso(), now_iso()))
+    # A client-chosen id is honored only if it's well-formed and unused; someone else's conversation is never reused.
+    fresh = conversation_id and re.fullmatch(r"conv_[a-f0-9]{20}", conversation_id) and \
+        not row(conn, "SELECT 1 FROM conversations WHERE id=?", (conversation_id,))
+    cid = conversation_id if fresh else new_id("conv")
+    conn.execute("INSERT INTO conversations (id, user_id, created_at, updated_at) VALUES (?,?,?,?)",
+                 (cid, uid, now_iso(), now_iso()))
     return cid
 
 
 def _typed_capture(conn, inp: CommandInput) -> str:
     cid = new_id("cap")
-    conn.execute("INSERT INTO captures (id, conversation_id, kind, captured_at, capture_tz, status, created_at) "
-                 "VALUES (?,?,?,?,?, 'transcribed', ?)", (cid, inp.conversation_id, "text", inp.captured_at, inp.tz, now_iso()))
+    conn.execute("INSERT INTO captures (id, user_id, conversation_id, kind, captured_at, capture_tz, status, created_at) "
+                 "VALUES (?,?,?,?,?,?, 'transcribed', ?)",
+                 (cid, inp.user_id, inp.conversation_id, "text", inp.captured_at, inp.tz, now_iso()))
     conn.execute("INSERT INTO transcript_versions (id, capture_id, version, text, source, created_at) VALUES (?,?,1,?, 'typed', ?)",
                  (new_id("tv"), cid, inp.text, now_iso()))
     return cid
@@ -81,10 +87,11 @@ def _typed_capture(conn, inp: CommandInput) -> str:
 
 def handle(conn: sqlite3.Connection, inp: CommandInput) -> dict:
     t0 = time.perf_counter()
-    inp.conversation_id = ensure_conversation(conn, inp.conversation_id)
+    uid = inp.user_id
+    inp.conversation_id = ensure_conversation(conn, uid, inp.conversation_id)
     tv = None
     if inp.capture_id:
-        cap = row(conn, "SELECT * FROM captures WHERE id=?", (inp.capture_id,))
+        cap = row(conn, "SELECT * FROM captures WHERE id=? AND user_id=?", (inp.capture_id, uid))
         if not cap:
             raise ValueError("Unknown capture.")
         tv = row(conn, "SELECT * FROM transcript_versions WHERE capture_id=? AND version=?",
@@ -106,11 +113,12 @@ def handle(conn: sqlite3.Connection, inp: CommandInput) -> dict:
 
     run_id = inp.client_run_id if inp.client_run_id and not row(conn, "SELECT 1 FROM runs WHERE id=?", (inp.client_run_id,)) \
         else new_id("run")
-    conn.execute("INSERT INTO runs (id, conversation_id, capture_id, kind, status, limits, started_at) VALUES (?,?,?,?,?,?,?)",
-                 (run_id, inp.conversation_id, inp.capture_id, "command", "running", jdump(RUN_LIMITS), now_iso()))
+    conn.execute("INSERT INTO runs (id, user_id, conversation_id, capture_id, kind, status, limits, started_at) "
+                 "VALUES (?,?,?,?,?,?,?,?)",
+                 (run_id, uid, inp.conversation_id, inp.capture_id, "command", "running", jdump(RUN_LIMITS), now_iso()))
     conn.execute("INSERT INTO messages (id, conversation_id, role, text, capture_id, run_id, created_at) VALUES (?,?,?,?,?,?,?)",
                  (new_id("msg"), inp.conversation_id, "user", inp.text, inp.capture_id, run_id, now_iso()))
-    active = P.active_for_conversation(conn, inp.conversation_id)
+    active = P.active_for_conversation(conn, uid, inp.conversation_id)
     captured = parse_iso(inp.captured_at)
     interp = classify(inp.text, has_active_proposal=bool(active), has_attachments=bool(inp.attachments),
                       captured_at=captured, tz=inp.tz)
@@ -144,7 +152,7 @@ def handle(conn: sqlite3.Connection, inp: CommandInput) -> dict:
         reply.status = "failed"
         run_event(conn, run_id, "error", f"Run failed: {type(e).__name__}")
     if reply.proposal_id:
-        P.mark_presented(conn, reply.proposal_id)
+        P.mark_presented(conn, uid, reply.proposal_id)
     text = "\n".join(reply.text_lines).strip()
     spoken = speechify(reply.spoken or _spoken(text))
     mid = new_id("msg")
@@ -159,7 +167,7 @@ def handle(conn: sqlite3.Connection, inp: CommandInput) -> dict:
             "specialists": specialists,
             "message": {"id": mid, "role": "assistant", "text": text, "spoken_text": spoken, "proposal_id": reply.proposal_id,
                         "capture_id": inp.capture_id, "created_at": now_iso()},
-            "proposal": P.view(conn, reply.proposal_id) if reply.proposal_id else None, "questions": reply.questions,
+            "proposal": P.view(conn, uid, reply.proposal_id) if reply.proposal_id else None, "questions": reply.questions,
             "citations": reply.citations, "visuals": reply.visuals, "events": events}
     conn.execute("UPDATE runs SET status=?, intent=?, specialists=?, finished_at=? WHERE id=?",
                  (status, jdump({"intent": interp.intent, "tv": tv["version"] if tv else 1, "response": resp}),
@@ -250,11 +258,12 @@ def _dispatch_multi(conn, inp: CommandInput, parts: list[Interpretation], reply:
 def _agenda(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id: str) -> None:
     from zoneinfo import ZoneInfo
     tz = inp.tz
-    day = date.fromisoformat(it.new_when.date) if it.new_when and it.new_when.date else ctx.local_today(conn)
+    uid = inp.user_id
+    day = date.fromisoformat(it.new_when.date) if it.new_when and it.new_when.date else ctx.local_today(conn, uid)
     label = _spoken_date(day.isoformat(), tz)
     run_event(conn, run_id, "tool", "Reading selected calendars")
     start, end = ctx.day_bounds(day, tz)
-    cal = ctx.events_between(conn, start, end, force=True)
+    cal = ctx.events_between(conn, uid, start, end, force=True)
     if cal["status"] not in ("ok", "partial"):
         reply.say(f"I can't read your calendar ({cal['status'].replace('_', ' ')}): {cal.get('detail') or ''}".strip())
         reply.spoken = "I can't read your calendar right now."
@@ -262,7 +271,7 @@ def _agenda(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id: s
     evs = cal["events"]
     zi = ZoneInfo(tz)
     from jarvis.agents import visuals as V
-    reply.visuals.append(V.calendar(conn, day, 1, tz, cal))
+    reply.visuals.append(V.calendar(conn, uid, day, 1, tz, cal))
 
     def t(e):
         return "All day" if e["all_day"] else datetime.fromisoformat(e["start"]).astimezone(zi).strftime("%-I:%M %p")
@@ -280,7 +289,7 @@ def _agenda(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id: s
                   f" ({longest['minutes'] // 60}h {longest['minutes'] % 60}m).")
     for c in ctx.conflicts(evs):
         reply.say(f"Conflict: {c}")
-    dls = [d for d in ctx.deadlines_snapshot(conn, day, 0)["items"] if d["local_date"] == day.isoformat()]
+    dls = [d for d in ctx.deadlines_snapshot(conn, uid, day, 0)["items"] if d["local_date"] == day.isoformat()]
     for d in dls:
         reply.say(f"  ⚑ Deadline: {d['summary']}")
     timed = [e for e in evs if not e["all_day"]]
@@ -294,11 +303,11 @@ def _agenda(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id: s
 
 def _weather(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id: str) -> None:
     from jarvis.agents import weather as W
-    if not W.enabled(conn):
+    if not W.enabled(conn, inp.user_id):
         reply.say("Weather is turned off in Settings.")
         return
-    loc = W.location(conn)
-    day = date.fromisoformat(it.new_when.date) if it.new_when and it.new_when.date else ctx.local_today(conn)
+    loc = W.location(conn, inp.user_id)
+    day = date.fromisoformat(it.new_when.date) if it.new_when and it.new_when.date else ctx.local_today(conn, inp.user_id)
     run_event(conn, run_id, "tool", f"Checking the forecast for {loc['name']} (Open-Meteo)")
     try:
         data = W.fetch(loc, inp.tz)
@@ -364,14 +373,14 @@ def _dispatch(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id:
         from jarvis.briefings import workflows
         kind = {"brief": "daily_command", "debrief": "nightly_debrief", "war_room": "weekly_war_room"}[intent]
         run_event(conn, run_id, "tool", "Reading selected calendars, tasks and deadlines")
-        b = workflows.generate(conn, kind, force=False, run_id=run_id)
+        b = workflows.generate(conn, inp.user_id, kind, force=False, run_id=run_id)
         reply.say(workflows.render_text(b))
         reply.spoken = b["spoken_summary"]
         return None
     if intent == "gta_queue":
         specialists.append("school_gta")
         run_event(conn, run_id, "tool", "Reading GTA obligations, school tasks and deadlines")
-        r = S.gta_queue(conn)
+        r = S.gta_queue(conn, inp.user_id)
         reply.say(r["text"])
         if r.get("basis"):
             reply.say(f"(Using your preference: {r['basis']})")
@@ -383,7 +392,7 @@ def _dispatch(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id:
     if intent == "complete":
         specialists.append("tasks")
         run_event(conn, run_id, "tool", "Reading open Todoist tasks")
-        r = S.propose_completion(conn, inp.text, inp.tz)
+        r = S.propose_completion(conn, inp.user_id, inp.text, inp.tz)
         reply.say(r["message"])
         reply.questions += r.get("questions", [])
         if r["specs"]:
@@ -400,12 +409,12 @@ def _dispatch(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id:
     if intent == "area_summary":
         specialists.append(it.payload)
         run_event(conn, run_id, "tool", f"Reading current {it.payload} records and tasks")
-        reply.say(S.area_summary(conn, it.payload))
-        snap = ctx.tasks_snapshot(conn)
+        reply.say(S.area_summary(conn, inp.user_id, it.payload))
+        snap = ctx.tasks_snapshot(conn, inp.user_id)
         from jarvis.agents.interpret import detect_area
         rel = [t["content"] for t in snap["tasks"] if detect_area(t["content"]) == it.payload][:5]
         reply.say("Open tasks: " + ("; ".join(rel) if rel else ("none" if snap["status"] == "ok" else f"Todoist {snap['status']}")))
-        if (plan := ctx.current_plan(conn, ctx.local_today(conn))):
+        if (plan := ctx.current_plan(conn, inp.user_id, ctx.local_today(conn, inp.user_id))):
             reply.say(f"(Today's mission: {plan['mission']})")
         reply.spoken = f"{len(rel)} open {it.payload} tasks." if snap["status"] == "ok" else "Todoist isn't connected."
         return None
@@ -435,11 +444,11 @@ def _new_proposal(conn, inp: CommandInput, reply: Reply, run_id: str, title: str
     if reply.defer:
         reply.deferred.append((title, specs, summary, assumptions, questions))
         return None
-    if (old := P.active_for_conversation(conn, inp.conversation_id)):
+    if (old := P.active_for_conversation(conn, inp.user_id, inp.conversation_id)):
         # one active approval context: an older unapproved plan is superseded, never silently executed
         conn.execute("UPDATE proposals SET status='superseded', updated_at=? WHERE id=?", (now_iso(), old["id"]))
         run_event(conn, run_id, "status", "Previous unapproved plan superseded by this one")
-    pid = P.create(conn, title, specs, summary, conversation_id=inp.conversation_id, run_id=run_id, capture_id=inp.capture_id,
+    pid = P.create(conn, inp.user_id, title, specs, summary, conversation_id=inp.conversation_id, run_id=run_id, capture_id=inp.capture_id,
                    assumptions=assumptions, questions=questions, origin=origin,
                    source={"capture_id": inp.capture_id, "text": inp.text, "captured_at": inp.captured_at, "tz": inp.tz})
     reply.proposal_id = pid
@@ -456,7 +465,7 @@ def _new_proposal(conn, inp: CommandInput, reply: Reply, run_id: str, title: str
 
 def _capture(conn, inp: CommandInput, commitments: list[Commitment], reply: Reply, run_id: str) -> None:
     run_event(conn, run_id, "tool", f"Separated {len(commitments)} commitment(s); checking for duplicates")
-    specs, assumptions, questions = S.propose_tasks(conn, commitments, inp.tz)
+    specs, assumptions, questions = S.propose_tasks(conn, inp.user_id, commitments, inp.tz)
     lines = []
     for i, (c, s) in enumerate(zip(commitments, specs)):
         when = s.args.get("due_local") or s.args.get("due_date")
@@ -516,8 +525,8 @@ def _schedule(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id:
         return
     c = it.commitments[0]
     run_event(conn, run_id, "tool", "Reading selected calendars for free time")
-    r = S.propose_event(conn, c, inp.tz)
-    if (plan := ctx.current_plan(conn, ctx.local_today(conn))):
+    r = S.propose_event(conn, inp.user_id, c, inp.tz)
+    if (plan := ctx.current_plan(conn, inp.user_id, ctx.local_today(conn, inp.user_id))):
         reply.say(f"(Today's mission: {plan['mission']})")
     reply.say(r["message"])
     reply.questions += r["questions"]
@@ -528,16 +537,17 @@ def _schedule(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id:
 
 
 def _cancel(conn, inp: CommandInput, reply: Reply, run_id: str) -> None:
-    latest = P.latest_for_conversation(conn, inp.conversation_id)
+    uid = inp.user_id
+    latest = P.latest_for_conversation(conn, uid, inp.conversation_id)
     if not latest or latest["status"] in ("rejected", "expired", "superseded", "cancelled", "verified"):
         reply.say("Nothing pending to cancel.")
         return
     try:
-        P.reject(conn, latest["id"], actor="user")
+        P.reject(conn, uid, latest["id"], actor="user")
         reply.say("Cancelled — that plan won't run. Nothing was written.")
         run_event(conn, run_id, "status", "Plan cancelled before execution")
     except P.ProposalError as e:
-        v = P.view(conn, latest["id"])
+        v = P.view(conn, uid, latest["id"])
         done = [i for i in v["items"] if i["state"] in ("verified", "executing", "unknown")]
         reply.say(e.message + " Current state: " + "; ".join(f"{i['index'] + 1}. {i['state']}" for i in done) + ".")
         reply.say("Queued items that hadn't started were stopped. Say 'undo' with the item if you want a compensating action proposed.")
@@ -559,18 +569,19 @@ def _voice_approve(conn, inp: CommandInput, it: Interpretation, reply: Reply, ru
         return
     if inp.speech_playing:
         reply.say("I heard “approve” while I was speaking, so I didn't treat it as approval. Tap Approve or say it again.")
-        audit(conn, "system", "approval.refused", "Approval heard during TTS playback ignored", "proposal", active["id"])
+        audit(conn, "system", "approval.refused", "Approval heard during TTS playback ignored", "proposal", active["id"],
+              uid=inp.user_id)
         return
     if inp.channel == "voice" and tv and tv["source"] == "stt":
         min_conf = get_settings().stt_min_confidence
         if tv["confidence"] is None or tv["confidence"] < min_conf:
             reply.say("I'm not confident I heard that clearly, so I didn't approve anything. Tap Approve or repeat it.")
             return
-    v = P.view(conn, active["id"])
+    v = P.view(conn, inp.user_id, active["id"])
     sel = [i["index"] for i in v["items"] if i["state"] == "proposed"] if it.approve_all else \
         [r if r >= 0 else len(v["items"]) - 1 for r in it.item_refs]
     try:
-        P.approve(conn, active["id"], v["version"], v["hash"], sel, channel="voice" if inp.channel == "voice" else "typed",
+        P.approve(conn, inp.user_id, active["id"], v["version"], v["hash"], sel, channel="voice" if inp.channel == "voice" else "typed",
                   session_id=inp.session_id, evidence=inp.text)
     except P.ProposalError as e:
         reply.say(e.message)
@@ -603,20 +614,21 @@ def _match_item(v: dict, it: Interpretation) -> tuple[list[int], str | None]:
 
 
 def _correct(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id: str, active: dict, captured: datetime):
-    v = P.view(conn, active["id"])
+    uid = inp.user_id
+    v = P.view(conn, uid, active["id"])
     idxs, question = _match_item(v, it)
     if question:
         reply.say(question)
         reply.questions.append(question)
         return
-    pv = P.current_version(conn, active["id"])
+    pv = P.current_version(conn, uid, active["id"])
     specs = P.specs_from_actions(P.actions_for_version(conn, pv["pv"]["id"]))
     tz = jload(pv["pv"]["source"], {}).get("tz", inp.tz)
     changes = []
     if it.intent == "remove_item":
         keep = [s for i, s in enumerate(specs) if i not in idxs]
         if not keep:
-            P.reject(conn, active["id"])
+            P.reject(conn, uid, active["id"])
             reply.say("Removed the only item — nothing left to approve.")
             return
         changes = [f"removed item {i + 1}" for i in idxs]
@@ -641,7 +653,7 @@ def _correct(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id: 
                 changes.append(f"“{label}” → {_fmt_date(s.args.get('due_local') or s.args.get('due_date'))}")
             elif s.action_type == "event.create":
                 changes.append("calendar blocks must be re-proposed with a fresh free-time check")
-    new_v = P.revise(conn, active["id"], specs, "; ".join(changes), actor="user")
+    new_v = P.revise(conn, uid, active["id"], specs, "; ".join(changes), actor="user")
     reply.proposal_id = active["id"]
     reply.say(f"Updated (version {new_v}): " + "; ".join(changes) + ". The earlier version can no longer be approved.")
     reply.spoken = "Updated. " + "; ".join(changes) + ". Shall I proceed?"
@@ -649,11 +661,13 @@ def _correct(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id: 
 
 
 def _retrieve_actions(conn, inp: CommandInput, reply: Reply) -> None:
-    props = rows(conn, "SELECT id FROM proposals WHERE conversation_id=? ORDER BY created_at DESC LIMIT 3", (inp.conversation_id,))
+    uid = inp.user_id
+    props = rows(conn, "SELECT id FROM proposals WHERE user_id=? AND conversation_id=? ORDER BY created_at DESC LIMIT 3",
+                 (uid, inp.conversation_id))
     if not props:
-        props = rows(conn, "SELECT id FROM proposals ORDER BY updated_at DESC LIMIT 1")
+        props = rows(conn, "SELECT id FROM proposals WHERE user_id=? ORDER BY updated_at DESC LIMIT 1", (uid,))
     for p in props:
-        v = P.view(conn, p["id"])
+        v = P.view(conn, uid, p["id"])
         done = [i for i in v["items"] if i["state"] not in ("proposed", "superseded", "skipped")]
         if not done and v["status"] == "proposed":
             continue
@@ -666,7 +680,7 @@ def _retrieve_actions(conn, inp: CommandInput, reply: Reply) -> None:
             reply.say(f"  {i['index'] + 1}. {i['expected_effect']} — {how}" + (f" {i['external_url']}" if i["external_url"] else ""))
         reply.spoken = f"{v['title']}: {v['status']}."
         return
-    active = P.active_for_conversation(conn, inp.conversation_id)
+    active = P.active_for_conversation(conn, uid, inp.conversation_id)
     reply.say("Nothing has been added yet." + (" One plan is still waiting for your approval." if active else ""))
 
 
@@ -678,13 +692,13 @@ def _remember(conn, inp: CommandInput, it: Interpretation, reply: Reply, run_id:
     content = content[0].upper() + content[1:]
     from jarvis.agents.interpret import detect_area
     area = detect_area(content)
-    proj = row(conn, "SELECT id FROM projects WHERE area=?", (area,)) if area else None
-    res = memory.add(conn, content, "preference", "user_statement", source_ref=f"capture:{inp.capture_id}",
+    proj = row(conn, "SELECT id FROM projects WHERE area=? AND user_id=?", (area, inp.user_id)) if area else None
+    res = memory.add(conn, inp.user_id, content, "preference", "user_statement", source_ref=f"capture:{inp.capture_id}",
                      project_id=proj["id"] if proj else None)
     run_event(conn, run_id, "tool", "Saved to memory")
     reply.say(f"Saved as a preference: “{content}”.")
     if res["superseded"]:
-        old = [memory.get(conn, m, with_versions=False)["content"] for m in res["superseded"]]
+        old = [memory.get(conn, inp.user_id, m, with_versions=False)["content"] for m in res["superseded"]]
         reply.say("This replaces: " + " | ".join(f"“{o}”" for o in old))
     reply.spoken = "Noted. I'll remember that." + (" It replaces your earlier preference." if res["superseded"] else "")
 
@@ -699,8 +713,8 @@ def _question(conn, inp: CommandInput, reply: Reply, run_id: str) -> None:
         reply.spoken = "Open-ended answers need the model, which is off right now."
         return
     tz = inp.tz
-    snap = ctx.today(conn)
-    mems = memory.relevant(conn, inp.text, limit=6)
+    snap = ctx.today(conn, inp.user_id)
+    mems = memory.relevant(conn, inp.user_id, inp.text, limit=6)
     plan = snap["plan"]
     context_lines = [f"Now: {inp.captured_at} ({tz}). Today {snap['date']}."]
     if plan:
@@ -711,14 +725,17 @@ def _question(conn, inp: CommandInput, reply: Reply, run_id: str) -> None:
     context_lines += [f"Due: {t['content']}" for t in (snap["tasks_due"] + snap["overdue"])[:10]]
     context_lines += [f"Memory ({m['source_kind']}, {m['observed_at'][:10]}): {m['content']}" for m in mems]
     run_event(conn, run_id, "tool", "Asking the reasoning model with bounded context")
-    system = ("You are Jarvis, AJ's concise personal operator. Lead with the priority and next action. Use only the provided "
-              "context; say when data is missing or a source is not connected. You cannot take actions from this answer; "
-              "if an action is needed, tell AJ what to say to propose it. Keep it under 120 words. Write plain conversational "
-              "sentences only: no markdown, no asterisks, no bullet symbols, no headings — your reply is also read aloud.")
+    from jarvis.agents.persona import persona
+    me = persona(conn, inp.user_id)
+    system = (f"You are {me.assistant}, {me.name}'s concise personal operator. Lead with the priority and next action. Use "
+              "only the provided context; say when data is missing or a source is not connected. You cannot take actions "
+              f"from this answer; if an action is needed, tell {me.name} what to say to propose it. Keep it under 120 words. "
+              "Write plain conversational sentences only: no markdown, no asterisks, no bullet symbols, no headings — your "
+              "reply is also read aloud.")
     try:
-        out = llm.complete(conn, purpose="question", system=system,
+        out = llm.complete(conn, uid=inp.user_id, purpose="question", system=system,
                            content=[{"type": "text", "text": "Context:\n" + "\n".join(context_lines)},
-                                    {"type": "text", "text": "AJ asks: " + inp.text}], max_tokens=800, run_id=run_id)
+                                    {"type": "text", "text": f"{me.name} asks: " + inp.text}], max_tokens=800, run_id=run_id)
         reply.say(out["text"].strip())
     except LLMError as e:
         reply.say(f"Model unavailable ({e.kind}): {e.message}")

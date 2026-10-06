@@ -13,7 +13,7 @@ import sqlite3
 from typing import Any
 
 from jarvis.core.db import jload, row, rows
-from jarvis.knowledge.ingest import resolve_path
+from jarvis.knowledge.ingest import readable_document, resolve_path
 
 NATIVE_PDF_MAX_BYTES = 10 * 1024 * 1024
 NATIVE_PDF_MAX_PAGES = 100
@@ -42,7 +42,7 @@ def _image_tokens(w: int, h: int) -> int:
     return max(1, int(w * h / 750))
 
 
-def build_evidence_blocks(conn: sqlite3.Connection, document_ids: list[str], question: str, max_images: int = 8,
+def build_evidence_blocks(conn: sqlite3.Connection, uid: str, document_ids: list[str], question: str, max_images: int = 8,
                           max_text_chars: int = 40000, prefer_native_pdf: bool = False,
                           include_data: bool = True) -> dict:
     blocks: list[dict] = [{"type": "text", "text": PREAMBLE}]
@@ -54,7 +54,7 @@ def build_evidence_blocks(conn: sqlite3.Connection, document_ids: list[str], que
     text_used = 0
 
     for doc_id in dict.fromkeys(document_ids):
-        doc = row(conn, "SELECT * FROM source_documents WHERE id=?", (doc_id,))
+        doc = readable_document(conn, uid, doc_id)     # yours or org-shared; anything else is "not found"
         if not doc or doc["deleted_at"]:
             omitted.append(f"{doc_id}: document not found or deleted")
             continue
@@ -150,9 +150,9 @@ def build_evidence_blocks(conn: sqlite3.Connection, document_ids: list[str], que
             "images": images_used, "text_chars": text_used}
 
 
-def evidence_preview(conn: sqlite3.Connection, document_ids: list[str], question: str, max_images: int = 8,
+def evidence_preview(conn: sqlite3.Connection, uid: str, document_ids: list[str], question: str, max_images: int = 8,
                      max_text_chars: int = 40000, prefer_native_pdf: bool = False) -> dict:
     """What would leave the machine: manifest + omissions + token estimate, no base64 payloads."""
-    res = build_evidence_blocks(conn, document_ids, question, max_images, max_text_chars, prefer_native_pdf,
+    res = build_evidence_blocks(conn, uid, document_ids, question, max_images, max_text_chars, prefer_native_pdf,
                                 include_data=False)
     return {k: res[k] for k in ("manifest", "omitted", "estimated_input_tokens", "images", "text_chars")}

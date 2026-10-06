@@ -22,19 +22,20 @@ AREA_LABEL = {"gta": "GTA", "school": "School", "business": "Business", "coachin
 
 
 # ------------------------------------------------------------------ Tasks specialist
-def todoist_target(conn, area: str | None) -> tuple[str | None, str | None, str | None, list[str]]:
+def todoist_target(conn, uid: str, area: str | None) -> tuple[str | None, str | None, str | None, list[str]]:
     """Returns (account_id, project_id, project_name, missing_fields). Never guesses a project from names."""
-    if "todoist" in A._overrides:
-        acct = A.get_account(conn, "todoist")
+    if A._override(uid, "todoist") is not None:
+        acct = A.get_account(conn, uid, "todoist")
         aid = acct["id"] if acct else None
     else:
-        acct = A.get_account(conn, "todoist")
+        acct = A.get_account(conn, uid, "todoist")
         if not acct or acct["status"] == "revoked":
             return None, None, None, ["Todoist not connected (Settings → Integrations)"]
         aid = acct["id"]
     if not aid:
         return None, None, None, ["Todoist not connected (Settings → Integrations)"]
-    data = jload(row(conn, "SELECT data FROM user_settings WHERE id=1")["data"], {})
+    from jarvis.core import settings as SETTINGS
+    data = SETTINGS.user_data(conn, uid)
     mapped = (data.get("todoist", {}).get("area_projects") or {}).get(area or "")
     if mapped and A.has_grant(conn, aid, "todoist_project", mapped, "write"):
         g = row(conn, "SELECT resource_name FROM scope_grants WHERE account_id=? AND resource_type='todoist_project' AND "
@@ -64,21 +65,21 @@ def _task_args(c: Commitment, project_id: str | None, tz: str) -> tuple[dict, li
     return args, notes
 
 
-def find_duplicates(conn, content: str, due_date: str | None, exclude_proposal: str | None = None) -> list[dict]:
+def find_duplicates(conn, uid: str, content: str, due_date: str | None, exclude_proposal: str | None = None) -> list[dict]:
     hits = []
-    snap = ctx.tasks_snapshot(conn)
+    snap = ctx.tasks_snapshot(conn, uid)
     for t in snap["tasks"]:
         if memory.similarity(t["content"], content) >= 0.6:
             hits.append({"where": "Todoist", "content": t["content"], "due": (t.get("due") or {}).get("date"), "id": t["id"]})
-    for tl in rows(conn, "SELECT content, due, status, external_id FROM task_links WHERE created_at > ? AND status IN "
-                         "('active','pending_sync','unknown')", (iso(utcnow() - timedelta(days=14)),)):
+    for tl in rows(conn, "SELECT content, due, status, external_id FROM task_links WHERE user_id=? AND created_at > ? "
+                         "AND status IN ('active','pending_sync','unknown')", (uid, iso(utcnow() - timedelta(days=14)))):
         if memory.similarity(tl["content"], content) >= 0.6 and not any(h.get("id") == tl["external_id"] for h in hits):
             hits.append({"where": "created by Jarvis", "content": tl["content"], "due": (jload(tl["due"], {}) or {}).get("due_date"),
                          "id": tl["external_id"]})
     for pa in rows(conn, "SELECT a.args, p.id pid FROM proposed_actions a JOIN proposal_versions v ON v.id=a.proposal_version_id "
                          "JOIN proposals p ON p.id=v.proposal_id AND p.current_version=v.version "
-                         "WHERE a.action_type='task.create' AND a.state IN ('proposed','queued','executing','unknown') "
-                         "AND p.status IN ('proposed','queued','executing','unknown')"):
+                         "WHERE p.user_id=? AND a.action_type='task.create' AND a.state IN ('proposed','queued','executing','unknown') "
+                         "AND p.status IN ('proposed','queued','executing','unknown')", (uid,)):
         if pa["pid"] == exclude_proposal:
             continue
         a = jload(pa["args"], {})
@@ -87,13 +88,13 @@ def find_duplicates(conn, content: str, due_date: str | None, exclude_proposal: 
     return hits
 
 
-def propose_tasks(conn, commitments: list[Commitment], tz: str) -> tuple[list[ActionSpec], list[str], list[str]]:
+def propose_tasks(conn, uid: str, commitments: list[Commitment], tz: str) -> tuple[list[ActionSpec], list[str], list[str]]:
     specs, assumptions, questions = [], [], []
     for c in commitments:
-        aid, pid, pname, missing = todoist_target(conn, c.area)
+        aid, pid, pname, missing = todoist_target(conn, uid, c.area)
         args, notes = _task_args(c, pid, tz)
         assumptions += [f"“{c.content}”: {n}" for n in notes]
-        dups = [] if c.duplicate_hint else find_duplicates(conn, c.content, args.get("due_date"))
+        dups = [] if c.duplicate_hint else find_duplicates(conn, uid, c.content, args.get("due_date"))
         reason = f"From your request: “{c.text.strip()}”"
         if dups:
             d = dups[0]
@@ -111,10 +112,10 @@ def propose_tasks(conn, commitments: list[Commitment], tz: str) -> tuple[list[Ac
 
 
 # ------------------------------------------------------------------ Calendar specialist
-def calendar_target(conn) -> tuple[str | None, str | None, str | None, list[str], list[str]]:
+def calendar_target(conn, uid: str) -> tuple[str | None, str | None, str | None, list[str], list[str]]:
     """(account_id, write_calendar_id, name, read_calendar_ids, missing)"""
-    acct = A.get_account(conn, "google")
-    if "google_calendar" in A._overrides:
+    acct = A.get_account(conn, uid, "google")
+    if A._override(uid, "google_calendar") is not None:
         aid = acct["id"] if acct else None
     else:
         if not acct or "calendar" not in acct["config"].get("purposes", []):
@@ -136,9 +137,9 @@ def _event_summary(content: str) -> str:
     return (s[0].upper() + s[1:]) if s else "Focus block"
 
 
-def propose_event(conn, c: Commitment, tz: str) -> dict:
+def propose_event(conn, uid: str, c: Commitment, tz: str) -> dict:
     """Returns {"specs", "assumptions", "questions", "message"} — never double-books, never moves fixed events."""
-    aid, cal_id, cal_name, reads, missing = calendar_target(conn)
+    aid, cal_id, cal_name, reads, missing = calendar_target(conn, uid)
     minutes = c.when.duration_min
     questions, assumptions = [], list(c.when.assumptions)
     summary = _event_summary(c.content)
@@ -153,7 +154,7 @@ def propose_event(conn, c: Commitment, tz: str) -> dict:
     d = date.fromisoformat(c.when.date)
     if c.when.time:
         start = timeparse.to_utc_instant(c.when.date, c.when.time, tz)
-        slots_info = ctx.free_slots(conn, d, minutes, None, tz)
+        slots_info = ctx.free_slots(conn, uid, d, minutes, None, tz)
         if slots_info["status"] not in ("ok",):
             return {"specs": [], "assumptions": assumptions, "questions": [],
                     "message": f"I can't read your calendar right now ({slots_info['status']}), so I won't propose a block blind."}
@@ -169,7 +170,7 @@ def propose_event(conn, c: Commitment, tz: str) -> dict:
         slot = {"start": start.astimezone(ZoneInfo(tz)).isoformat(), "end": end.astimezone(ZoneInfo(tz)).isoformat()}
         alts = []
     else:
-        slots_info = ctx.free_slots(conn, d, minutes, c.when.part_of_day, tz)
+        slots_info = ctx.free_slots(conn, uid, d, minutes, c.when.part_of_day, tz)
         if slots_info["status"] != "ok":
             return {"specs": [], "assumptions": assumptions, "questions": [],
                     "message": f"I can't read your calendar ({slots_info['status']}: {slots_info.get('detail')}), so I won't "
@@ -202,18 +203,19 @@ def _fmt_slot(s: dict, tz: str) -> str:
 
 
 # ------------------------------------------------------------------ School/GTA specialist
-def gta_queue(conn) -> dict:
-    snap = ctx.today(conn)
+def gta_queue(conn, uid: str) -> dict:
+    snap = ctx.today(conn, uid)
     tz = snap["tz"]
-    pref = [m for m in (memory.get(conn, r["id"], with_versions=False) for r in rows(
-        conn, "SELECT id FROM memories WHERE entity='pref.schoolwork_during_gta' AND status='active' "
-              "ORDER BY updated_at DESC LIMIT 1")) if m] or memory.list_(conn, q="schoolwork GTA shifts", status="active", limit=1)
+    pref = [m for m in (memory.get(conn, uid, r["id"], with_versions=False) for r in rows(
+        conn, "SELECT id FROM memories WHERE user_id=? AND entity='pref.schoolwork_during_gta' AND status='active' "
+              "ORDER BY updated_at DESC LIMIT 1", (uid,))) if m] or \
+        memory.list_(conn, uid, q="schoolwork GTA shifts", status="active", limit=1)
     gta_tasks, school_tasks = [], []
     for t in snap["tasks_due"] + snap["overdue"]:
         area = _task_area(t["content"])
         (gta_tasks if area == "gta" else school_tasks if area == "school" else []).append(t)
     # upcoming school tasks beyond today (next 7 days) are queue candidates too
-    for t in (ctx.tasks_snapshot(conn)["tasks"]):
+    for t in (ctx.tasks_snapshot(conn, uid)["tasks"]):
         dd = (t.get("due") or {}).get("date")
         if dd and snap["date"] < dd[:10] <= (date.fromisoformat(snap["date"]) + timedelta(days=7)).isoformat():
             if _task_area(t["content"]) == "school" and t not in school_tasks:
@@ -274,9 +276,9 @@ def _fmt_time(e: dict, tz: str) -> str:
 
 
 # ------------------------------------------------------------------ Complete-task helper (Tasks specialist)
-def propose_completion(conn, text: str, tz: str) -> dict:
+def propose_completion(conn, uid: str, text: str, tz: str) -> dict:
     try:
-        tp = A.task_provider(conn)
+        tp = A.task_provider(conn, uid)
     except A.NotConnected as e:
         return {"specs": [], "message": str(e)}
     target = re.sub(r"^(mark|check off|complete|close)\s+|(\s+as)?\s+(done|complete|completed)\.?$|^(i )?(finished|completed|am done with)\s+",
@@ -293,7 +295,7 @@ def propose_completion(conn, text: str, tz: str) -> dict:
         return {"specs": [], "message": "Which one? " + "; ".join(f"{i + 1}) {t.content}" for i, t in enumerate(cands)),
                 "questions": ["Which task did you finish?"]}
     t = cands[0]
-    acct = A.get_account(conn, "todoist")
+    acct = A.get_account(conn, uid, "todoist")
     sub = [x for x in tasks if x.parent_id == t.id and not x.is_completed]
     note = f" It has {len(sub)} open subtask(s); Jarvis will not complete them unless you list them." if sub else ""
     spec = ActionSpec(action_type="task.complete", args={"task_id": t.id, "content": t.content}, timezone=tz,
@@ -304,9 +306,9 @@ def propose_completion(conn, text: str, tz: str) -> dict:
 
 
 # ------------------------------------------------------------------ Training / Business summaries (no autonomous plan changes)
-def area_summary(conn, area: str) -> str:
-    proj = row(conn, "SELECT * FROM projects WHERE area=?", (area,))
-    mems = memory.list_(conn, status="active", project_id=proj["id"] if proj else None, limit=6) if proj else []
+def area_summary(conn, uid: str, area: str) -> str:
+    proj = row(conn, "SELECT * FROM projects WHERE area=? AND user_id=?", (area, uid))
+    mems = memory.list_(conn, uid, status="active", project_id=proj["id"] if proj else None, limit=6) if proj else []
     lines = [f"{AREA_LABEL.get(area, area)} — current context (from your records):"]
     lines += [f"  • {m['content']} (source: {m['source_kind']}, {m['observed_at'][:10]})" for m in mems] or ["  • No records yet."]
     if area in ("business", "coaching"):
@@ -315,14 +317,14 @@ def area_summary(conn, area: str) -> str:
 
 
 # ------------------------------------------------------------------ re-resolve destinations after setup
-def refresh_open_destinations(conn) -> list[str]:
-    """After AJ picks a Todoist project / write calendar, re-resolve open (unapproved) proposals whose items were
-    blocked only by the missing destination. Each changed proposal gets a new version (approval still required)."""
+def refresh_open_destinations(conn, uid: str) -> list[str]:
+    """After the user picks a Todoist project / write calendar, re-resolve their open (unapproved) proposals whose items
+    were blocked only by the missing destination. Each changed proposal gets a new version (approval still required)."""
     from jarvis.actions import proposals as P
     from jarvis.agents.interpret import detect_area
     changed = []
-    for r in rows(conn, "SELECT id FROM proposals WHERE status='proposed'"):
-        pv = P.current_version(conn, r["id"])
+    for r in rows(conn, "SELECT id FROM proposals WHERE user_id=? AND status='proposed'", (uid,)):
+        pv = P.current_version(conn, uid, r["id"])
         acts = P.actions_for_version(conn, pv["pv"]["id"])
         if not any(a["missing_fields"] for a in acts):
             continue
@@ -330,18 +332,18 @@ def refresh_open_destinations(conn) -> list[str]:
         dirty = False
         for sp in specs:
             if sp.action_type == "task.create" and sp.missing_fields:
-                aid, pid, pname, missing = todoist_target(conn, detect_area(sp.args.get("content", "")))
+                aid, pid, pname, missing = todoist_target(conn, uid, detect_area(sp.args.get("content", "")))
                 if pid and (pid, missing) != (sp.target_resource, sp.missing_fields):
                     sp.account_id, sp.target_resource, sp.target_name, sp.missing_fields = aid, pid, pname, missing
                     sp.args["project_id"] = pid
                     sp.expected_effect = re.sub(r" in [^“”]*$", "", sp.expected_effect) + f" in {pname}"
                     dirty = True
             elif sp.action_type == "event.create" and sp.missing_fields:
-                aid, cal, cname, _reads, missing = calendar_target(conn)
+                aid, cal, cname, _reads, missing = calendar_target(conn, uid)
                 if cal:
                     sp.account_id, sp.target_resource, sp.target_name, sp.missing_fields = aid, cal, cname, missing
                     dirty = True
         if dirty:
-            P.revise(conn, r["id"], specs, "Destination chosen in Settings", actor="user")
+            P.revise(conn, uid, r["id"], specs, "Destination chosen in Settings", actor="user")
             changed.append(r["id"])
     return changed

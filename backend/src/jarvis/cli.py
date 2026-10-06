@@ -20,7 +20,8 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("tts-download", help="Download the local Jarvis voice models (Piper, ~200 MB)")
     sub.add_parser("gen-vapid", help="Generate Web Push VAPID keys for .env")
     sub.add_parser("setup-key", help="Create the token-encryption key file if missing")
-    sub.add_parser("reset-password", help="Set a new owner password (local shell only) and sign out all devices")
+    rp = sub.add_parser("reset-password", help="Set a new password for a user (local shell only) and sign out their devices")
+    rp.add_argument("--user", help="username (default: the first owner)")
     sub.add_parser("setup-token", help="Print a one-time first-run setup token (needed when setting up over HTTPS)")
     sub.add_parser("backup", help="Create a backup")
     rs = sub.add_parser("restore", help="Restore a backup (neutralizes jobs/approvals, disables schedules)")
@@ -82,16 +83,20 @@ def main(argv: list[str] | None = None) -> None:
         from jarvis.core.db import connection, tx
         from jarvis.core.util import audit, now_iso
         from jarvis.security.auth import hash_password
-        pw = getpass.getpass("New owner password (12+ chars): ")
+        with connection() as conn:
+            u = conn.execute("SELECT id, username FROM users WHERE username=? COLLATE NOCASE", (a.user,)).fetchone() if a.user \
+                else conn.execute("SELECT id, username FROM users WHERE id='usr_owner'").fetchone()
+        if not u:
+            sys.exit("No such user." if a.user else "No owner yet — open the app on this machine to set one up.")
+        pw = getpass.getpass(f"New password for {u['username']} (12+ chars): ")
         if len(pw) < 12 or pw != getpass.getpass("Repeat: "):
             sys.exit("Passwords must match and be at least 12 characters.")
         with connection() as conn, tx(conn):
-            if not conn.execute("SELECT 1 FROM owner WHERE id=1").fetchone():
-                sys.exit("No owner yet — open the app on this machine to set one up.")
-            conn.execute("UPDATE owner SET password_hash=? WHERE id=1", (hash_password(pw),))
-            conn.execute("UPDATE sessions SET revoked_at=? WHERE revoked_at IS NULL", (now_iso(),))
-            audit(conn, "user", "auth.password_reset", "Owner password reset from local CLI; all sessions revoked")
-        print("Password updated. All devices were signed out; re-pair your phone.")
+            conn.execute("UPDATE users SET password_hash=? WHERE id=?", (hash_password(pw), u["id"]))
+            conn.execute("UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", (now_iso(), u["id"]))
+            audit(conn, "user", "auth.password_reset", f"Password for {u['username']} reset from the local CLI; their "
+                  "sessions were revoked", "user", u["id"], uid=u["id"])
+        print(f"Password updated for {u['username']}. Their devices were signed out; re-pair phones.")
     elif a.cmd == "setup-token":
         if not _print_setup_token_if_needed():
             sys.exit("An owner already exists; setup tokens are only for first-run setup.")

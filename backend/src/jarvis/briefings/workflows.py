@@ -40,7 +40,7 @@ def _source_notes(sources: dict) -> list[str]:
     return out
 
 
-def daily_command(conn, snap: dict) -> dict:
+def daily_command(conn, uid: str, snap: dict) -> dict:
     tz, today = snap["tz"], date.fromisoformat(snap["date"])
     tasks = sorted(snap["tasks_due"] + snap["overdue"], key=lambda t: _task_rank(t, today))
     dls_today = [d for d in snap["deadlines"] if d["local_date"] == snap["date"]]
@@ -87,24 +87,25 @@ def daily_command(conn, snap: dict) -> dict:
                              ["Todoist not available"] if snap["sources"]["todoist"]["status"] != "ok" else ["Nothing due"])}]}
 
 
-def nightly_debrief(conn, snap: dict) -> dict:
+def nightly_debrief(conn, uid: str, snap: dict) -> dict:
     tz, today = snap["tz"], date.fromisoformat(snap["date"])
     start, end = ctx.day_bounds(today, tz)
     completed, comp_status = [], "not_connected"
     try:
-        tp = A.task_provider(conn)
+        tp = A.task_provider(conn, uid)
         completed = [t.content for t in tp.list_completed(iso(start), iso(end))]
         comp_status = "ok"
     except A.NotConnected:
         pass
     except ProviderError as e:
         comp_status = f"unavailable ({e.kind})"
-    verified = [r["expected_effect"] for r in rows(conn, "SELECT a.expected_effect FROM proposed_actions a JOIN verification_receipts r "
-                                                         "ON r.action_id=a.id WHERE r.ok=1 AND r.verified_at BETWEEN ? AND ?",
-                                                   (iso(start), iso(end)))]
+    verified = [r["expected_effect"] for r in rows(
+        conn, "SELECT a.expected_effect FROM proposed_actions a JOIN verification_receipts r ON r.action_id=a.id "
+              "JOIN proposal_versions v ON v.id=a.proposal_version_id JOIN proposals p ON p.id=v.proposal_id "
+              "WHERE p.user_id=? AND r.ok=1 AND r.verified_at BETWEEN ? AND ?", (uid, iso(start), iso(end)))]
     open_today = [t["content"] for t in sorted(snap["tasks_due"] + snap["overdue"], key=lambda t: _task_rank(t, today))]
     tomorrow = (today + timedelta(days=1)).isoformat()
-    tmr = [t["content"] for t in ctx.tasks_snapshot(conn)["tasks"] if (t.get("due") or {}).get("date", "")[:10] == tomorrow]
+    tmr = [t["content"] for t in ctx.tasks_snapshot(conn, uid)["tasks"] if (t.get("due") or {}).get("date", "")[:10] == tomorrow]
     plan = snap["plan"]
     questions = ["What else did you finish today that isn't listed?", "Anything that changed or slipped?",
                  f"Carry these to tomorrow? {', '.join(open_today[:5])}" if open_today else "Anything to carry to tomorrow?"]
@@ -120,9 +121,9 @@ def nightly_debrief(conn, snap: dict) -> dict:
                          {"title": "Questions", "items": questions}]}
 
 
-def weekly_war_room(conn, snap: dict) -> dict:
+def weekly_war_room(conn, uid: str, snap: dict) -> dict:
     tz, today = snap["tz"], date.fromisoformat(snap["date"])
-    tasks = ctx.tasks_snapshot(conn)
+    tasks = ctx.tasks_snapshot(conn, uid)
     overdue = [t for t in tasks["tasks"] if (t.get("due") or {}).get("date", "9999")[:10] < snap["date"]]
     by_area: dict[str, int] = {}
     for t in overdue:
@@ -130,18 +131,20 @@ def weekly_war_room(conn, snap: dict) -> dict:
         by_area[a] = by_area.get(a, 0) + 1
     start = ctx.day_bounds(today + timedelta(days=1), tz)[0]
     end = ctx.day_bounds(today + timedelta(days=7), tz)[1]
-    cal = ctx.events_between(conn, start, end, force=True)
+    cal = ctx.events_between(conn, uid, start, end, force=True)
     load: dict[str, float] = {}
     for e in cal["events"]:
         if e["busy"] and not e["all_day"]:
             d = datetime.fromisoformat(e["start"]).astimezone(ZoneInfo(tz)).strftime("%a")
             hrs = (datetime.fromisoformat(e["end"]) - datetime.fromisoformat(e["start"])).total_seconds() / 3600
             load[d] = round(load.get(d, 0) + hrs, 1)
-    dls = ctx.deadlines_snapshot(conn, today + timedelta(days=1), 7)
+    dls = ctx.deadlines_snapshot(conn, uid, today + timedelta(days=1), 7)
     upcoming_due = [t for t in tasks["tasks"] if snap["date"] < (t.get("due") or {}).get("date", "0")[:10] <=
                     (today + timedelta(days=7)).isoformat()]
     wk_start = iso(utcnow() - timedelta(days=7))
-    done_cnt = row(conn, "SELECT COUNT(*) c FROM verification_receipts WHERE ok=1 AND verified_at>?", (wk_start,))["c"]
+    done_cnt = row(conn, "SELECT COUNT(*) c FROM verification_receipts r JOIN proposed_actions a ON a.id=r.action_id "
+                         "JOIN proposal_versions v ON v.id=a.proposal_version_id JOIN proposals p ON p.id=v.proposal_id "
+                         "WHERE p.user_id=? AND r.ok=1 AND r.verified_at>?", (uid, wk_start))["c"]
     decisions = []
     if overdue:
         worst = max(by_area, key=by_area.get)
@@ -193,15 +196,15 @@ def spoken_summary(kind: str, c: dict) -> str:
     return speechify(" ".join(parts))
 
 
-def generate(conn: sqlite3.Connection, kind: str, force: bool = False, run_id: str | None = None,
+def generate(conn: sqlite3.Connection, uid: str, kind: str, force: bool = False, run_id: str | None = None,
              schedule_run_id: str | None = None, catch_up: bool = False, scheduled: bool = False) -> dict:
-    snap = ctx.today(conn, force=True)
-    content = BUILDERS[kind](conn, snap)
+    snap = ctx.today(conn, uid, force=True)
+    content = BUILDERS[kind](conn, uid, snap)
     input_hash = canonical_hash({"kind": kind, "c": {k: content.get(k) for k in content if k != "headline"},
                                  "plan": (snap["plan"] or {}).get("version_id")})
     if not force:
-        cached = row(conn, "SELECT * FROM briefings WHERE kind=? AND for_date=? AND input_hash=? ORDER BY created_at DESC LIMIT 1",
-                     (kind, snap["date"], input_hash))
+        cached = row(conn, "SELECT * FROM briefings WHERE user_id=? AND kind=? AND for_date=? AND input_hash=? "
+                           "ORDER BY created_at DESC LIMIT 1", (uid, kind, snap["date"], input_hash))
         if cached:
             if run_id:
                 run_event(conn, run_id, "status", "Inputs unchanged — reusing cached briefing")
@@ -212,8 +215,10 @@ def generate(conn: sqlite3.Connection, kind: str, force: bool = False, run_id: s
     ok, _ = llm.available(conn)
     if ok and content.get("priorities"):
         try:
-            out = llm.complete(conn, purpose=f"briefing:{kind}", scheduled=scheduled, run_id=run_id, role="briefing",
-                               system="Write ONE punchy, direct sentence (max 25 words) that frames AJ's day from these facts. "
+            from jarvis.agents.persona import persona
+            out = llm.complete(conn, uid=uid, purpose=f"briefing:{kind}", scheduled=scheduled, run_id=run_id, role="briefing",
+                               system=f"Write ONE punchy, direct sentence (max 25 words) that frames {persona(conn, uid).name}'s "
+                                      "day from these facts. "
                                       "Do not add facts, tasks, meetings or numbers that are not listed. Do not change the mission.",
                                content=[{"type": "text", "text": jdump({k: content.get(k) for k in
                                                                         ("mission", "priorities", "obstacle", "first_action")})}],
@@ -226,19 +231,19 @@ def generate(conn: sqlite3.Connection, kind: str, force: bool = False, run_id: s
     plan_vid = None
     with tx(conn):
         if kind == "daily_command" and not snap["plan"] and content.get("mission"):
-            plan_vid = save_plan(conn, date.fromisoformat(snap["date"]), content["mission"], content["priorities"], [],
+            plan_vid = save_plan(conn, uid, date.fromisoformat(snap["date"]), content["mission"], content["priorities"], [],
                                  content.get("first_action"), author="briefing", status="proposed",
                                  reason="Proposed by Daily Command", in_tx=True)
         else:
             plan_vid = (snap["plan"] or {}).get("version_id")
         bid = new_id("brf")
-        conn.execute("INSERT INTO briefings (id, kind, for_date, plan_version_id, input_hash, content, spoken_summary, sources, "
-                     "generated_by, schedule_run_id, catch_up, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                     (bid, kind, snap["date"], plan_vid, input_hash, jdump(content), spoken, jdump(snap["sources"]),
+        conn.execute("INSERT INTO briefings (id, user_id, kind, for_date, plan_version_id, input_hash, content, spoken_summary, "
+                     "sources, generated_by, schedule_run_id, catch_up, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     (bid, uid, kind, snap["date"], plan_vid, input_hash, jdump(content), spoken, jdump(snap["sources"]),
                       generated_by, schedule_run_id, int(catch_up), now_iso()))
         title = KIND_LABEL[kind] + (" (catch-up)" if catch_up else "")
         first = content.get("first_action") or content.get("obstacle") or "Open Jarvis for details."
-        notify(conn, "briefing", f"{title}: {first}"[:120], spoken, "briefing", bid)
+        notify(conn, uid, "briefing", f"{title}: {first}"[:120], spoken, "briefing", bid)
     return _view(row(conn, "SELECT * FROM briefings WHERE id=?", (bid,)))
 
 
@@ -272,14 +277,14 @@ def render_text(b: dict) -> str:
     return "\n".join(lines)
 
 
-def save_plan(conn, d: date, mission: str, priorities: list[str], constraints: list[str], first_action: str | None,
+def save_plan(conn, uid: str, d: date, mission: str, priorities: list[str], constraints: list[str], first_action: str | None,
               author: str, status: str, reason: str | None, in_tx: bool = False) -> str:
     def body():
-        p = row(conn, "SELECT * FROM daily_plans WHERE plan_date=?", (d.isoformat(),))
+        p = row(conn, "SELECT * FROM daily_plans WHERE user_id=? AND plan_date=?", (uid, d.isoformat()))
         if not p:
             pid = new_id("plan")
-            conn.execute("INSERT INTO daily_plans (id, plan_date, current_version, created_at) VALUES (?,?,0,?)",
-                         (pid, d.isoformat(), now_iso()))
+            conn.execute("INSERT INTO daily_plans (id, user_id, plan_date, current_version, created_at) VALUES (?,?,?,0,?)",
+                         (pid, uid, d.isoformat(), now_iso()))
             cur = 0
         else:
             pid, cur = p["id"], p["current_version"]
@@ -298,10 +303,12 @@ def save_plan(conn, d: date, mission: str, priorities: list[str], constraints: l
         return body()
 
 
-def record_nightly_answers(conn, briefing_id: str | None, answers: dict) -> dict:
+def record_nightly_answers(conn, uid: str, briefing_id: str | None, answers: dict) -> dict:
     """User statements update local records directly; external completion still requires proposals."""
+    if briefing_id and not row(conn, "SELECT id FROM briefings WHERE id=? AND user_id=?", (briefing_id, uid)):
+        raise KeyError(briefing_id)
     did = new_id("dbf")
-    conn.execute("INSERT INTO debriefs (id, kind, briefing_id, content, created_at, updated_at) VALUES (?,?,?,?,?,?)",
-                 (did, "nightly", briefing_id, jdump(answers), now_iso(), now_iso()))
+    conn.execute("INSERT INTO debriefs (id, user_id, kind, briefing_id, content, created_at, updated_at) "
+                 "VALUES (?,?,?,?,?,?,?)", (did, uid, "nightly", briefing_id, jdump(answers), now_iso(), now_iso()))
     return {"id": did, "content": answers,
             "note": "Recorded locally. To mark Todoist tasks complete, say 'mark X done' and approve the proposal."}

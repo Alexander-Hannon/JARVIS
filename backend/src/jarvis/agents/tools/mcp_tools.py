@@ -48,7 +48,7 @@ def _propose(srv: dict, t: dict, mode: dict):
     return handler
 
 
-def tools(conn) -> list[Tool]:
+def tools(conn, uid: str) -> list[Tool]:
     out = []
     for srv, t, mode in H.active_tools(conn):
         read = mode["mode"] == "read"

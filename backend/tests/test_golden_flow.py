@@ -98,7 +98,7 @@ def test_s3_approve_selected_verify_receipts_persist_across_restart(client, fake
     from jarvis.core.db import reset_init_cache
     reset_init_cache()
     c2 = TestClient(create_app())
-    tok = c2.post("/api/auth/login", json={"password": "correct horse battery"}).json()["csrf_token"]
+    tok = c2.post("/api/auth/login", json={"username": "aj", "password": "correct horse battery"}).json()["csrf_token"]
     v2 = c2.get(f"/api/proposals/{p['id']}").json()
     assert [i["external_id"] for i in v2["items"]] == [i["external_id"] for i in v["items"]]
     hist = c2.get("/api/actions/history").json()
@@ -144,8 +144,8 @@ def test_s4_retry_after_timeout_no_duplicate_and_duplicate_detection(client, fak
 def test_same_capture_transcript_processed_once(client, fakes, conn):
     from jarvis.core.util import new_id, now_iso
     cap = new_id("cap")
-    conn.execute("INSERT INTO captures (id, kind, captured_at, capture_tz, status, created_at) VALUES (?, 'audio', ?, "
-                 "'America/Chicago', 'transcribed', ?)", (cap, "2026-09-28T20:00:00Z", now_iso()))
+    conn.execute("INSERT INTO captures (id, user_id, kind, captured_at, capture_tz, status, created_at) VALUES "
+                 "(?, 'usr_owner', 'audio', ?, 'America/Chicago', 'transcribed', ?)", (cap, "2026-09-28T20:00:00Z", now_iso()))
     conn.execute("INSERT INTO transcript_versions (id, capture_id, version, text, source, confidence, created_at) VALUES "
                  "(?,?,1,?, 'stt', 0.9, ?)", (new_id("tv"), cap, "buy printer paper tomorrow", now_iso()))
     a = cmd(client, "", capture_id=cap, transcript_version=1, channel="voice")
@@ -261,16 +261,16 @@ def test_s10_speech_cannot_approve_and_voice_approval_rules(client, fakes, conn)
     # low-confidence STT approval refused
     from jarvis.core.util import new_id, now_iso
     cap = new_id("cap")
-    conn.execute("INSERT INTO captures (id, conversation_id, kind, captured_at, capture_tz, status, created_at) VALUES "
-                 "(?,?, 'audio', ?, 'America/Chicago', 'transcribed', ?)", (cap, conv, "2026-09-28T20:01:00Z", now_iso()))
+    conn.execute("INSERT INTO captures (id, user_id, conversation_id, kind, captured_at, capture_tz, status, created_at) VALUES "
+                 "(?,'usr_owner',?, 'audio', ?, 'America/Chicago', 'transcribed', ?)", (cap, conv, "2026-09-28T20:01:00Z", now_iso()))
     conn.execute("INSERT INTO transcript_versions (id, capture_id, version, text, source, confidence, created_at) VALUES "
                  "(?,?,1,'approve','stt',0.2,?)", (new_id("tv"), cap, now_iso()))
     z = cmd(client, "", conv, channel="voice", capture_id=cap)
     assert "not confident" in z["message"]["text"]
     # a clear explicit voice approval of the presented plan works
     cap2 = new_id("cap")
-    conn.execute("INSERT INTO captures (id, conversation_id, kind, captured_at, capture_tz, status, created_at) VALUES "
-                 "(?,?, 'audio', ?, 'America/Chicago', 'transcribed', ?)", (cap2, conv, "2026-09-28T20:02:00Z", now_iso()))
+    conn.execute("INSERT INTO captures (id, user_id, conversation_id, kind, captured_at, capture_tz, status, created_at) VALUES "
+                 "(?,'usr_owner',?, 'audio', ?, 'America/Chicago', 'transcribed', ?)", (cap2, conv, "2026-09-28T20:02:00Z", now_iso()))
     conn.execute("INSERT INTO transcript_versions (id, capture_id, version, text, source, confidence, created_at) VALUES "
                  "(?,?,1,'approve','stt',0.93,?)", (new_id("tv"), cap2, now_iso()))
     ok = cmd(client, "", conv, channel="voice", capture_id=cap2)
@@ -361,7 +361,7 @@ def test_s19_stale_tab_and_changed_account(client, fakes, conn):
     # AJ reconnects a DIFFERENT Todoist account before the worker runs
     from jarvis.integrations import accounts as A
     conn.execute("BEGIN")
-    A.upsert_account(conn, "todoist", "someone-else", "tok2", "api_token", external_account_id="u2")
+    A.upsert_account(conn, "usr_owner", "todoist", "someone-else", "tok2", "api_token", external_account_id="u2")
     conn.execute("COMMIT")
     run_worker(conn)
     v = client.get(f"/api/proposals/{p['id']}").json()
@@ -408,17 +408,17 @@ def test_s20b_budget_reservation_fail_closed(client, conn):
 
     from jarvis.llm import budget as B
     with pytest.raises(B.BudgetBlocked):
-        B.reserve(conn, "x", "claude-opus-5-5", 1000, 1000)                 # no budget chosen
+        B.reserve(conn, "usr_owner", "x", "claude-opus-5-5", 1000, 1000)                 # no budget chosen
     B.update_budget(conn, {"paid_inference_enabled": True, "daily_limit_usd": 0.05})
-    rid = B.reserve(conn, "x", "claude-opus-5-5", 1000, 1000)
+    rid = B.reserve(conn, "usr_owner", "x", "claude-opus-5-5", 1000, 1000)
     with pytest.raises(B.BudgetBlocked) as e:
-        B.reserve(conn, "x", "claude-opus-5-5", 1000, 2000)                 # reserved + new would exceed $0.05
+        B.reserve(conn, "usr_owner", "x", "claude-opus-5-5", 1000, 2000)                 # reserved + new would exceed $0.05
     assert e.value.code == "limit_reached"
     B.reconcile(conn, rid, "claude-opus-5-5", {"input_tokens": 100, "output_tokens": 50}, "req_1")
     with pytest.raises(B.BudgetBlocked) as e2:
-        B.reserve(conn, "x", "unknown-model", 10, 10, scheduled=True)
+        B.reserve(conn, "usr_owner", "x", "unknown-model", 10, 10, scheduled=True)
     assert e2.value.code in ("background_disabled", "pricing_unknown")
-    s = B.summary(conn)
+    s = B.summary(conn, "usr_owner")
     assert s["spent_today_usd"] > 0 and s["reserved_today_usd"] == 0
 
 

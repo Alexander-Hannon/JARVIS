@@ -1,10 +1,11 @@
-"""First-run seed: editable, dated user context (NOT hardcoded instructions), projects, default
-schedules (shown disabled until AJ activates them), and unconfirmed course-mapping suggestions."""
+"""Seeds. `seed()` prepares the org (control state, org settings) on every start; `seed_user()` prepares one person
+when they're created: settings, disabled default schedules, and — for the first owner of a *personal* install only —
+AJ's editable, dated context (projects, memories, unconfirmed course mappings). Other users start clean."""
 from __future__ import annotations
 
 import sqlite3
 
-from jarvis.core.db import jdump, row
+from jarvis.core.db import jdump, jload, row
 from jarvis.core.util import new_id, now_iso
 from jarvis.memory import service as memory
 
@@ -55,38 +56,61 @@ DEFAULT_SETTINGS = {
               "tts_preset": "jarvis", "auto_send": True},
     "privacy": {"retain_audio": False},
     "notifications": {"lock_screen_details": False, "push_kinds": {"briefing": True, "action_result": False}},
+    "todoist": {"area_projects": {}},
+    "weather": {"enabled": True, "provider": "open-meteo"},
+}
+# AJ's personal install: how he's addressed and where he is (other users set their own in Settings → Account).
+PERSONAL_SETTINGS = {"location": {"name": "Huntsville, AL", "lat": 34.7304, "lon": -86.5861},
+                     "address_as": {"name": "AJ", "honorific": "sir", "pronoun": "he"}}
+PERSONAL_TZ = "America/Chicago"
+
+DEFAULT_ORG = {
     "budget": {"paid_inference_enabled": False, "background_paid_enabled": False, "daily_limit_usd": None,
                "monthly_limit_usd": None, "max_output_tokens": 4000, "max_tool_calls": 6, "max_specialists": 3,
                "effort": "low", "chosen": False},
     "models": {"chief": "claude-opus-5-5", "vision": "claude-opus-5-5", "briefing": "claude-opus-5-5"},
-    "todoist": {"area_projects": {}},
-    "location": {"name": "Huntsville, AL", "lat": 34.7304, "lon": -86.5861},
-    "weather": {"enabled": True, "provider": "open-meteo"},
 }
 
 
 def seed(conn: sqlite3.Connection) -> bool:
-    if row(conn, "SELECT id FROM user_settings WHERE id=1"):
-        return False
-    now = now_iso()
-    conn.execute("INSERT INTO user_settings (id, display_name, timezone, data, updated_at) VALUES (1,'AJ','America/Chicago',?,?)",
-                 (jdump(DEFAULT_SETTINGS), now))
+    """Org-level defaults; safe to run on every start."""
     conn.execute("INSERT OR IGNORE INTO control_state (id, actions_paused) VALUES (1, 0)")
+    org = jload((row(conn, "SELECT data FROM org_settings WHERE id=1") or {}).get("data"), {}) or {}
+    missing = {k: v for k, v in DEFAULT_ORG.items() if not org.get(k)}
+    if not missing:
+        return False
+    conn.execute("INSERT INTO org_settings (id, data, updated_at) VALUES (1,?,?) ON CONFLICT(id) DO UPDATE SET data=?, "
+                 "updated_at=?", (jdump(org | missing), now_iso(), jdump(org | missing), now_iso()))
+    return True
+
+
+def seed_user(conn: sqlite3.Connection, uid: str, display_name: str, tz: str | None = None) -> bool:
+    if row(conn, "SELECT user_id FROM user_settings WHERE user_id=?", (uid,)):
+        return False
+    from jarvis.config import get_settings
+    personal = get_settings().edition == "personal" and uid == "usr_owner"
+    now = now_iso()
+    tz = tz or (PERSONAL_TZ if personal else "UTC")
+    data = DEFAULT_SETTINGS | (PERSONAL_SETTINGS if personal else {"address_as": {"name": display_name, "honorific": None}})
+    conn.execute("INSERT INTO user_settings (user_id, timezone, data, updated_at) VALUES (?,?,?,?)",
+                 (uid, tz, jdump(data), now))
+    for key, wf, label, h, m, wds, grace in SCHEDULES:
+        conn.execute("INSERT INTO schedules (id, user_id, key, workflow, label, tz, hour, minute, weekdays, enabled, "
+                     "misfire_grace_minutes, destination, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,0,?,'inbox',?,?)",
+                     (new_id("sch"), uid, key, wf, label, tz, h, m, jdump(wds), grace, now, now))
+    if not personal:
+        return True
     slug_to_id = {}
     for slug, name, area, desc, sensitive in PROJECTS:
         pid = new_id("proj")
         slug_to_id[slug] = pid
-        conn.execute("INSERT INTO projects (id, slug, name, area, description, sensitive, created_at, updated_at) VALUES "
-                     "(?,?,?,?,?,?,?,?)", (pid, slug, name, area, desc, sensitive, now, now))
+        conn.execute("INSERT INTO projects (id, user_id, slug, name, area, description, sensitive, created_at, updated_at) "
+                     "VALUES (?,?,?,?,?,?,?,?,?)", (pid, uid, slug, name, area, desc, sensitive, now, now))
     for content, type_, slug, entity, pinned, review, expires, eff in CONTEXT:
-        memory.add(conn, content, type_, "seed", source_ref=SEED_REF, project_id=slug_to_id.get(slug) if slug else None,
-                   entity=entity, pinned=pinned, review_at=review, expires_at=expires, effective_from=eff,
-                   supersede_similar=False)
-    for key, wf, label, h, m, wds, grace in SCHEDULES:
-        conn.execute("INSERT INTO schedules (id, key, workflow, label, tz, hour, minute, weekdays, enabled, misfire_grace_minutes, "
-                     "destination, created_at, updated_at) VALUES (?,?,?,?, 'America/Chicago', ?,?,?, 0, ?, 'inbox', ?,?)",
-                     (new_id("sch"), key, wf, label, h, m, jdump(wds), grace, now, now))
+        memory.add(conn, uid, content, type_, "seed", source_ref=SEED_REF,
+                   project_id=slug_to_id.get(slug) if slug else None, entity=entity, pinned=pinned, review_at=review,
+                   expires_at=expires, effective_from=eff, supersede_similar=False)
     for pat, course, role in COURSE_SUGGESTIONS:
-        conn.execute("INSERT INTO course_mappings (id, pattern, course, role, confirmed, created_at) VALUES (?,?,?,?,0,?)",
-                     (new_id("cm"), pat, course, role, now))
+        conn.execute("INSERT INTO course_mappings (id, user_id, pattern, course, role, confirmed, created_at) "
+                     "VALUES (?,?,?,?,?,0,?)", (new_id("cm"), uid, pat, course, role, now))
     return True

@@ -14,9 +14,9 @@ from jarvis.sandbox import service as S
 from jarvis.sandbox.runtime import get_runtime
 
 
-def sandbox_available(conn) -> bool:
+def sandbox_available(conn, uid: str) -> bool:
     try:
-        return bool(get_runtime().available()[0])
+        return bool(get_runtime(uid).available()[0])
     except Exception:  # noqa: BLE001
         return False
 
@@ -38,7 +38,7 @@ def sandbox_run(run, command: str, timeout_s: int = 120):
     from jarvis.agents.agent import describe_step
     run_event(run.conn, run.run_id, "tool", f"Sandbox: {describe_step('exec', command, None).lower()}")
     try:
-        return S.run(run.conn, run.run_id, command, timeout_s)
+        return S.run(run.conn, run.uid, run.run_id, command, timeout_s)
     except S.SandboxError as e:
         return _err(e)
 
@@ -48,7 +48,7 @@ def sandbox_run(run, command: str, timeout_s: int = 120):
       risk="act", family="sandbox", deferred=True, available=sandbox_available)
 def sandbox_write_file(run, path: str, content: str):
     try:
-        return S.write_file(run.conn, run.run_id, path, content)
+        return S.write_file(run.conn, run.uid, run.run_id, path, content)
     except S.SandboxError as e:
         return _err(e)
 
@@ -57,7 +57,7 @@ def sandbox_write_file(run, path: str, content: str):
       risk="read", family="sandbox", deferred=True, available=sandbox_available)
 def sandbox_read_file(run, path: str):
     try:
-        return {"text": S.read_file(run.conn, run.run_id, path, 20000), "note": "Untrusted data."}
+        return {"text": S.read_file(run.conn, run.uid, run.run_id, path, 20000), "note": "Untrusted data."}
     except S.SandboxError as e:
         return _err(e)
 
@@ -71,7 +71,7 @@ def sandbox_read_file(run, path: str):
 def browser_open(run, url: str):
     run_event(run.conn, run.run_id, "tool", f"Opening {url} in the sandbox browser")
     try:
-        r = S.browse(run.conn, run.run_id, url)
+        r = S.browse(run.conn, run.uid, run.run_id, url)
     except S.SandboxError as e:
         return _err(e)
     if r.get("screenshot_id"):
@@ -109,12 +109,12 @@ def propose_sandbox_network(run, domains: list[str], why: str, minutes: int = 30
 def propose_export_file(run, sandbox_path: str, dest_path: str):
     from jarvis.actions.proposals import ActionSpec
     from jarvis.localops import files as F
-    roots = [r for r in F.list_roots(run.conn) if r["writable"]]
+    roots = [r for r in F.list_roots(run.conn, run.uid) if r["writable"]]
     if not roots:
         return {"error": "No writable workspace folder designated (Settings → Local files)."}
     try:
-        content = S.read_file(run.conn, run.run_id, sandbox_path, 1_000_000)
-        plan = F.plan_write(run.conn, roots[0]["id"], re.sub(r"^/+", "", dest_path), content)
+        content = S.read_file(run.conn, run.uid, run.run_id, sandbox_path, 1_000_000)
+        plan = F.plan_write(run.conn, run.uid, roots[0]["id"], re.sub(r"^/+", "", dest_path), content)
     except S.SandboxError as e:
         return _err(e)
     except F.FileOpError as e:

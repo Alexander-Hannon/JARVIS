@@ -131,7 +131,7 @@ def mark_changed(sid: str) -> None:
 
 
 def add(conn: sqlite3.Connection, name: str, transport: str, *, command: str | None = None, args: list[str] | None = None,
-        url: str | None = None, env: dict[str, str] | None = None, bearer: str | None = None) -> dict:
+        url: str | None = None, env: dict[str, str] | None = None, bearer: str | None = None, by: str | None = None) -> dict:
     name = (name or "").strip().lower()
     if not NAME_RE.match(name):
         raise MCPError("bad_name", "Name: 2–24 chars, lowercase letters/digits/underscore, starting with a letter.")
@@ -158,7 +158,7 @@ def add(conn: sqlite3.Connection, name: str, transport: str, *, command: str | N
                      "updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
                      (sid, name, transport, command, jdump(args or []), url, secrets.encrypt(json.dumps(sec)) if sec else None,
                       now_iso(), now_iso()))
-        audit(conn, "user", "mcp.added", f"MCP server added: {name} ({transport})", "mcp_server", sid)
+        audit(conn, "user", "mcp.added", f"MCP server added: {name} ({transport})", "mcp_server", sid, uid=by)
     return discover(conn, sid)
 
 
@@ -189,8 +189,8 @@ def discover(conn: sqlite3.Connection, sid: str) -> dict:
     return view(conn, sid)
 
 
-def review(conn: sqlite3.Connection, sid: str, modes: dict[str, dict]) -> dict:
-    """AJ approves the CURRENT tool list: per-tool mode off|read|propose and tier (1 = may be auto-approved by a rule)."""
+def review(conn: sqlite3.Connection, sid: str, modes: dict[str, dict], by: str | None = None) -> dict:
+    """An admin approves the CURRENT tool list: per-tool mode off|read|propose and tier (1 = may be auto-approved by a rule)."""
     srv = get(conn, sid)
     if not srv:
         raise MCPError("not_found", "Unknown MCP server.")
@@ -212,11 +212,11 @@ def review(conn: sqlite3.Connection, sid: str, modes: dict[str, dict]) -> dict:
         conn.execute("UPDATE mcp_servers SET tool_modes=?, pinned_hash=?, status='active', reviewed_at=?, updated_at=? "
                      "WHERE id=?", (jdump(clean), srv["discovered_hash"], now_iso(), now_iso(), sid))
         audit(conn, "user", "mcp.reviewed", f"Reviewed {srv['name']}: " + ", ".join(f"{k}={v['mode']}" for k, v in clean.items()),
-              "mcp_server", sid, {"hash": srv["discovered_hash"]})
+              "mcp_server", sid, {"hash": srv["discovered_hash"]}, uid=by)
     return view(conn, sid)
 
 
-def set_enabled(conn, sid: str, enabled: bool) -> dict:
+def set_enabled(conn, sid: str, enabled: bool, by: str | None = None) -> dict:
     srv = get(conn, sid)
     if not srv:
         raise MCPError("not_found", "Unknown MCP server.")
@@ -224,14 +224,16 @@ def set_enabled(conn, sid: str, enabled: bool) -> dict:
         if enabled else "disabled"
     with tx(conn):
         conn.execute("UPDATE mcp_servers SET status=?, updated_at=? WHERE id=?", (new, now_iso(), sid))
-        audit(conn, "user", "mcp." + ("enabled" if enabled else "disabled"), srv["name"], "mcp_server", sid)
+        audit(conn, "user", "mcp." + ("enabled" if enabled else "disabled"), srv["name"], "mcp_server", sid, uid=by)
     return view(conn, sid)
 
 
-def remove(conn, sid: str) -> None:
+def remove(conn, sid: str, by: str | None = None) -> None:
+    if not get(conn, sid):
+        raise MCPError("not_found", "Unknown MCP server.")
     with tx(conn):
         conn.execute("DELETE FROM mcp_servers WHERE id=?", (sid,))
-        audit(conn, "user", "mcp.removed", "MCP server removed", "mcp_server", sid)
+        audit(conn, "user", "mcp.removed", "MCP server removed", "mcp_server", sid, uid=by)
 
 
 def view(conn, sid: str) -> dict:

@@ -14,7 +14,6 @@ import time
 from typing import Any
 
 from jarvis.config import get_settings
-from jarvis.core.db import jload, row
 from jarvis.core.util import record_latency
 from jarvis.llm import budget
 
@@ -34,10 +33,11 @@ class LLMProvider:
     def available(self, conn) -> tuple[bool, str]:
         raise NotImplementedError
 
-    def complete(self, conn: sqlite3.Connection, *, purpose: str, system: str, content: list[dict] | str,
+    def complete(self, conn: sqlite3.Connection, *, uid: str, purpose: str, system: str, content: list[dict] | str,
                  schema: dict | None = None, max_tokens: int | None = None, effort: str | None = None,
                  scheduled: bool = False, run_id: str | None = None, role: str = "chief") -> dict:
-        """Returns {"text": str, "data": dict|None, "usage": dict, "model": str, "request_id": str|None}."""
+        """`uid` is who the call is for (spend is attributed to them).
+        Returns {"text": str, "data": dict|None, "usage": dict, "model": str, "request_id": str|None}."""
         raise NotImplementedError
 
 
@@ -45,15 +45,14 @@ def _api_key(conn) -> str | None:
     s = get_settings()
     if s.anthropic_api_key:
         return s.anthropic_api_key
-    from jarvis.integrations.accounts import get_account, read_secret
-    acct = get_account(conn, "anthropic")
+    from jarvis.integrations.accounts import org_account, read_secret
+    acct = org_account(conn, "anthropic")      # one org-level key pays for the install
     return read_secret(acct) if acct else None
 
 
 def _model_for(conn, role: str) -> str:
-    from jarvis.core.db import jload, row
-    data = jload((row(conn, "SELECT data FROM user_settings WHERE id=1") or {}).get("data"), {}) or {}
-    return data.get("models", {}).get(role) or get_settings().model_default
+    from jarvis.core import settings as S
+    return S.org_data(conn).get("models", {}).get(role) or get_settings().model_default
 
 
 def estimate_input_tokens(system: str, content: list[dict] | str) -> int:
@@ -81,7 +80,7 @@ class AnthropicProvider(LLMProvider):
             return False, "Paid inference is off until a budget is chosen and enabled (Settings → Budget)."
         return True, "ok"
 
-    def complete(self, conn, *, purpose, system, content, schema=None, max_tokens=None, effort=None, scheduled=False,
+    def complete(self, conn, *, uid, purpose, system, content, schema=None, max_tokens=None, effort=None, scheduled=False,
                  run_id=None, role="chief") -> dict:
         import anthropic
 
@@ -92,7 +91,8 @@ class AnthropicProvider(LLMProvider):
         model = _model_for(conn, role)
         max_tokens = min(max_tokens or 4000, int(b.get("max_output_tokens") or 4000))
         try:
-            res_id = budget.reserve(conn, purpose, model, estimate_input_tokens(system, content), max_tokens, scheduled, run_id)
+            res_id = budget.reserve(conn, uid, purpose, model, estimate_input_tokens(system, content), max_tokens, scheduled,
+                                    run_id)
         except budget.BudgetBlocked as e:
             raise LLMError("budget", e.message) from e
         client = anthropic.Anthropic(api_key=key, max_retries=1, timeout=120.0)
@@ -151,12 +151,12 @@ def _progress(conn, run_id: str | None, blk) -> None:
         run_event(conn, run_id, "tool", "Looking up the right tool")
 
 
-def fast_mode_enabled(conn) -> bool:
-    data = jload((row(conn, "SELECT data FROM user_settings WHERE id=1") or {}).get("data"), {}) or {}
-    return bool((data.get("research") or {}).get("fast_mode"))
+def fast_mode_enabled(conn, uid: str) -> bool:
+    from jarvis.core import settings as S
+    return bool((S.user_data(conn, uid).get("research") or {}).get("fast_mode"))
 
 
-def _agent_step_anthropic(self, conn, *, system, messages, tools, max_tokens=4000, effort=None, run_id=None,
+def _agent_step_anthropic(self, conn, *, uid, system, messages, tools, max_tokens=4000, effort=None, run_id=None,
                           max_web_searches=0, scheduled=False) -> dict:
     """One model step of the agent loop, STREAMED so progress (web searches, page reads) shows up as it happens.
     Returns {"content": [blocks], "stop_reason", "usage", "model", "progress_emitted": True}. Content blocks are the
@@ -170,9 +170,9 @@ def _agent_step_anthropic(self, conn, *, system, messages, tools, max_tokens=400
     model = _model_for(conn, "agent")
     max_tokens = min(max_tokens, max(2000, int(b.get("max_output_tokens") or 4000)))
     est_in = sum(len(str(m.get("content"))) for m in messages) // 3 + len(system) // 3 + 2500
-    fast = fast_mode_enabled(conn)
+    fast = fast_mode_enabled(conn, uid)
     try:
-        res_id = budget.reserve(conn, "agent", model, est_in, max_tokens, scheduled, run_id, max_web_searches=max_web_searches,
+        res_id = budget.reserve(conn, uid, "agent", model, est_in, max_tokens, scheduled, run_id, max_web_searches=max_web_searches,
                                 multiplier=budget.FAST_MODE_MULT if fast else 1.0)
     except budget.BudgetBlocked as e:
         raise LLMError("budget", e.message) from e
@@ -241,8 +241,8 @@ class ScriptedLLM(LLMProvider):
     def available(self, conn) -> tuple[bool, str]:
         return True, "contract mock"
 
-    def agent_step(self, conn, *, system, messages, tools, max_tokens=4000, effort=None, run_id=None, max_web_searches=0,
-                   scheduled=False):
+    def agent_step(self, conn, *, uid=None, system, messages, tools, max_tokens=4000, effort=None, run_id=None,
+                   max_web_searches=0, scheduled=False):
         """Scripted agent steps: each queued response is {"content": [block dicts], "stop_reason": ...} or a callable(req)."""
         import copy
         req = {"system": system, "messages": copy.deepcopy(messages), "tools": tools,
@@ -259,9 +259,9 @@ class ScriptedLLM(LLMProvider):
             out = {"content": [{"type": "text", "text": out}], "stop_reason": "end_turn"}
         return {"usage": {}, "model": "scripted-mock", **out}
 
-    def complete(self, conn, *, purpose, system, content, schema=None, max_tokens=None, effort=None, scheduled=False,
-                 run_id=None, role="chief") -> dict:
-        req = {"purpose": purpose, "system": system, "content": content, "schema": schema, "scheduled": scheduled}
+    def complete(self, conn, *, uid=None, purpose, system, content, schema=None, max_tokens=None, effort=None,
+                 scheduled=False, run_id=None, role="chief") -> dict:
+        req = {"uid": uid, "purpose": purpose, "system": system, "content": content, "schema": schema, "scheduled": scheduled}
         self.requests.append(req)
         if self.fn:
             out = self.fn(req)

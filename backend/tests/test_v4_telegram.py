@@ -98,10 +98,10 @@ def test_forwarded_text_is_saved_not_executed(client, conn, tg, fakes):
 def test_notifications_mirror_to_paired_chat(client, conn, tg):
     from jarvis.briefings.notify import notify
     pair(client, conn, tg)
-    notify(conn, "mission", "Inbox watch", "Dr. Lee needs grades.")
+    notify(conn, "usr_owner", "mission", "Inbox watch", "Dr. Lee needs grades.")
     run_worker(conn)
     assert tg.sent[-1]["text"] == "Inbox watch\nDr. Lee needs grades."
     client.post("/api/channels/telegram/notify", {"notify": False})
-    notify(conn, "mission", "Inbox watch", "again")
+    notify(conn, "usr_owner", "mission", "Inbox watch", "again")
     run_worker(conn)
     assert tg.sent[-1]["text"] != "Inbox watch\nagain"

@@ -135,10 +135,10 @@ def test_scope_without_sandbox_gets_no_desktop(client, rt):
     from jarvis.agents import agent as A
     from jarvis.core.db import get_conn
     c = get_conn()
-    assert A.computer_tools(c, A.Scope(families=frozenset({"email"}))) == []
-    assert A.computer_tools(c, A.COMMAND_SCOPE) == [{"type": "computer_toolset_20260801"}]
+    assert A.computer_tools(c, "usr_owner", A.Scope(families=frozenset({"email"}))) == []
+    assert A.computer_tools(c, "usr_owner", A.COMMAND_SCOPE) == [{"type": "computer_toolset_20260801"}]
     client.post("/api/sandbox/settings", {"computer_use": False})
-    assert A.computer_tools(c, A.COMMAND_SCOPE) == []
+    assert A.computer_tools(c, "usr_owner", A.COMMAND_SCOPE) == []
 
 
 def _proxy_module(tmp_path, monkeypatch):
@@ -163,7 +163,7 @@ def test_large_files_are_never_silently_truncated(client, conn, rt):
     """Regression (found live): exec output is clipped for the model, so file reads use a binary path instead."""
     from jarvis.sandbox import service as S
     rt.files["/workspace/big.csv"] = ("x," * 20000).encode()
-    assert len(S.read_file(conn, None, "big.csv", 100000)) == 40000
+    assert len(S.read_file(conn, "usr_owner", None, "big.csv", 100000)) == 40000
     with pytest.raises(S.SandboxError) as e:
-        S.read_file(conn, None, "big.csv", 1000)
+        S.read_file(conn, "usr_owner", None, "big.csv", 1000)
     assert e.value.code == "too_big"

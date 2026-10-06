@@ -112,13 +112,13 @@ def test_classify():
 
 def _account(conn):
     aid = new_id("acct")
-    conn.execute("INSERT INTO integration_accounts (id, provider, label, created_at, updated_at) VALUES (?,?,?,?,?)",
-                 (aid, "ics", "Canvas feed", now_iso(), now_iso()))
+    conn.execute("INSERT INTO integration_accounts (id, user_id, provider, label, created_at, updated_at) "
+                 "VALUES (?,'usr_owner',?,?,?,?)", (aid, "ics", "Canvas feed", now_iso(), now_iso()))
     for m in MAPS:
-        conn.execute("INSERT INTO course_mappings (id, pattern, course, role, confirmed, created_at) VALUES (?,?,?,?,1,?)",
-                     (new_id("cm"), m["pattern"], m["course"], m["role"], now_iso()))
-    conn.execute("INSERT INTO course_mappings (id, pattern, course, role, confirmed, created_at) VALUES (?,?,?,?,0,?)",
-                 (new_id("cm"), "Dentist", "X", "own", now_iso()))
+        conn.execute("INSERT INTO course_mappings (id, user_id, pattern, course, role, confirmed, created_at) "
+                     "VALUES (?,'usr_owner',?,?,?,1,?)", (new_id("cm"), m["pattern"], m["course"], m["role"], now_iso()))
+    conn.execute("INSERT INTO course_mappings (id, user_id, pattern, course, role, confirmed, created_at) "
+                 "VALUES (?,'usr_owner',?,?,?,0,?)", (new_id("cm"), "Dentist", "X", "own", now_iso()))
     return aid
 
 

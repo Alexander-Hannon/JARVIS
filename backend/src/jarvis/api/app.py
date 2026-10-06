@@ -13,6 +13,7 @@ from jarvis.config import REPO_ROOT, get_settings
 from jarvis.core.db import get_conn, tx
 from jarvis.core.seed import seed
 from jarvis.security import auth, secrets
+from jarvis.security.principal import PERMS, Principal, from_session
 
 log = logging.getLogger("jarvis.api")
 
@@ -55,6 +56,24 @@ def require_session(request: Request, conn=Depends(db)) -> dict:
     return s
 
 
+def principal(session: dict = Depends(require_session)) -> Principal:
+    """The acting user. FastAPI caches `require_session` per request, so this adds no extra lookup."""
+    return from_session(session)
+
+
+def require(perm: str):
+    """Route dependency: the caller must hold `perm` (see security/principal.PERMS)."""
+    if perm not in PERMS:
+        raise KeyError(perm)
+
+    def dep(p: Principal = Depends(principal)) -> Principal:
+        if not p.can(perm):
+            raise HTTPException(403, "You don't have permission to do that.")
+        return p
+    dep.__name__ = f"require_{perm.replace('.', '_')}"
+    return dep
+
+
 def create_app() -> FastAPI:
     from jarvis.logsafe import configure
     configure()
@@ -89,11 +108,21 @@ def create_app() -> FastAPI:
             resp.headers["Cache-Control"] = "no-store"
         return resp
 
-    from jarvis.api import routes, v4
+    from jarvis.integrations.accounts import NotConnected
+
+    @app.exception_handler(NotConnected)
+    async def not_connected(_request: Request, exc: NotConnected):
+        # A provider this user hasn't connected is a normal state (409), never a server error.
+        return JSONResponse({"detail": {"code": "not_connected", "message": str(exc)}}, status_code=409)
+
+    from jarvis.api import routes, users, v4
     app.include_router(routes.public)
     app.include_router(v4.public)
-    app.include_router(routes.router, dependencies=[Depends(require_session)])
-    app.include_router(v4.router, dependencies=[Depends(require_session)])
+    # Any signed-in role (auditors included); everything else needs "use". Admin-only routes add require(...) on top.
+    app.include_router(routes.common, dependencies=[Depends(require_session)])
+    app.include_router(routes.router, dependencies=[Depends(require("use"))])
+    app.include_router(v4.router, dependencies=[Depends(require("use"))])
+    app.include_router(users.router, dependencies=[Depends(require_session)])   # each route requires users.manage
 
     dist = REPO_ROOT / "frontend" / "dist"
     if dist.exists():

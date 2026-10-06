@@ -1,4 +1,6 @@
-"""Tiered autonomy: AJ-authored rules that pre-approve low-risk (T1) actions, plus a short undo window.
+"""Tiered autonomy: user-authored rules that pre-approve low-risk (T1) actions, plus a short undo window.
+
+Rules are personal: a rule only ever auto-approves proposals of the user who created it.
 
 Invariants (application code; the model has no path to any of this):
 - Rules are created only through the authenticated Settings/Actions UI (`create_rule` is never exposed as a tool).
@@ -32,7 +34,7 @@ class PolicyError(Exception):
 
 
 # ------------------------------------------------------------------------------------------------ rules
-def create_rule(conn: sqlite3.Connection, action_type: str, label: str, *, match: dict | None = None,
+def create_rule(conn: sqlite3.Connection, uid: str, action_type: str, label: str, *, match: dict | None = None,
                 origins: list[str] | None = None, daily_cap: int = 10, expires_at: str | None = None,
                 session_id: str | None = None) -> dict:
     at = R.get(action_type)
@@ -47,22 +49,22 @@ def create_rule(conn: sqlite3.Connection, action_type: str, label: str, *, match
         raise PolicyError(400, "bad_cap", "Daily cap must be between 1 and 100.")
     rid = new_id("rule")
     with tx(conn):
-        conn.execute("INSERT INTO autonomy_rules (id, action_type, label, match, origins, daily_cap, created_at, "
-                     "created_session, expires_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                     (rid, action_type, label.strip()[:120] or at.label, jdump(match or {}), jdump(origins), daily_cap,
+        conn.execute("INSERT INTO autonomy_rules (id, user_id, action_type, label, match, origins, daily_cap, created_at, "
+                     "created_session, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                     (rid, uid, action_type, label.strip()[:120] or at.label, jdump(match or {}), jdump(origins), daily_cap,
                       now_iso(), session_id, expires_at))
         audit(conn, "user", "policy.rule_created", f"Auto-approve rule: {label} ({action_type})", "rule", rid,
-              {"match": match or {}, "origins": origins, "daily_cap": daily_cap})
+              {"match": match or {}, "origins": origins, "daily_cap": daily_cap}, uid=uid)
     return rule_view(conn, rid)
 
 
-def revoke_rule(conn: sqlite3.Connection, rule_id: str) -> dict:
+def revoke_rule(conn: sqlite3.Connection, uid: str, rule_id: str) -> dict:
     with tx(conn):
-        r = row(conn, "SELECT * FROM autonomy_rules WHERE id=?", (rule_id,))
+        r = row(conn, "SELECT * FROM autonomy_rules WHERE id=? AND user_id=?", (rule_id, uid))
         if not r:
             raise PolicyError(404, "not_found", "Rule not found.")
         conn.execute("UPDATE autonomy_rules SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (now_iso(), rule_id))
-        audit(conn, "user", "policy.rule_revoked", f"Rule revoked: {r['label']}", "rule", rule_id)
+        audit(conn, "user", "policy.rule_revoked", f"Rule revoked: {r['label']}", "rule", rule_id, uid=uid)
     return rule_view(conn, rule_id)
 
 
@@ -83,8 +85,9 @@ def rule_view(conn, rule_id: str) -> dict:
             "expires_at": r["expires_at"], "revoked_at": r["revoked_at"], "active": live}
 
 
-def list_rules(conn) -> list[dict]:
-    return [rule_view(conn, r["id"]) for r in rows(conn, "SELECT id FROM autonomy_rules ORDER BY created_at DESC")]
+def list_rules(conn, uid: str) -> list[dict]:
+    return [rule_view(conn, r["id"]) for r in rows(conn, "SELECT id FROM autonomy_rules WHERE user_id=? "
+                                                         "ORDER BY created_at DESC", (uid,))]
 
 
 def catalog() -> list[dict]:
@@ -103,10 +106,10 @@ def _matches(rule: dict, act: dict) -> bool:
     return all(args.get(k) == v for k, v in (m.get("args") or {}).items())
 
 
-def _live_rules(conn, action_type: str, origin: str) -> list[dict]:
+def _live_rules(conn, uid: str, action_type: str, origin: str) -> list[dict]:
     out = []
-    for r in rows(conn, "SELECT * FROM autonomy_rules WHERE action_type=? AND revoked_at IS NULL ORDER BY created_at",
-                  (action_type,)):
+    for r in rows(conn, "SELECT * FROM autonomy_rules WHERE user_id=? AND action_type=? AND revoked_at IS NULL "
+                        "ORDER BY created_at", (uid, action_type)):
         if r["expires_at"] and parse_iso(r["expires_at"]) < utcnow():
             continue
         if origin not in jload(r["origins"], []):
@@ -117,7 +120,8 @@ def _live_rules(conn, action_type: str, origin: str) -> list[dict]:
 
 def evaluate(conn, proposal_id: str) -> dict:
     """Decide (without writing) whether every item of the current version is covered by a live T1 rule."""
-    p = P.current_version(conn, proposal_id)
+    p = P.current_version(conn, None, proposal_id)
+    owner = p["user_id"]                     # only the proposal owner's own rules can cover it
     acts = P.actions_for_version(conn, p["pv"]["id"])
     origin = p.get("origin") or "command"
     if not acts or p["status"] != "proposed":
@@ -132,13 +136,14 @@ def evaluate(conn, proposal_id: str) -> dict:
             return {"ok": False, "reason": f"{a['action_type']} always needs your approval"}
         if a["missing_fields"] or a["state"] != "proposed":
             return {"ok": False, "reason": "an item still needs details"}
-        rule = next((r for r in _live_rules(conn, a["action_type"], origin)
+        rule = next((r for r in _live_rules(conn, owner, a["action_type"], origin)
                      if _matches(r, a) and _used_today(conn, r["id"]) + picks.get(r["id"], 0) < r["daily_cap"]), None)
         if rule is None:
             return {"ok": False, "reason": f"no rule covers {a['action_type']}"}
         picks[rule["id"]] = picks.get(rule["id"], 0) + 1
         cover.append((a, rule))
-    return {"ok": True, "version": p["current_version"], "hash": p["pv"]["hash"], "items": [a["item_index"] for a, _ in cover],
+    return {"ok": True, "owner": owner, "version": p["current_version"], "hash": p["pv"]["hash"],
+            "items": [a["item_index"] for a, _ in cover],
             "rules": picks, "labels": sorted({r["label"] for _, r in cover})}
 
 
@@ -149,11 +154,11 @@ def try_auto_approve(conn: sqlite3.Connection, proposal_id: str) -> dict | None:
     d = evaluate(conn, proposal_id)
     if not d["ok"]:
         return None
-    res = P.approve(conn, proposal_id, d["version"], d["hash"], d["items"], channel="policy", session_id=None,
-                    evidence="Auto-approved by rule(s): " + ", ".join(d["labels"]))
+    res = P.approve(conn, d["owner"], proposal_id, d["version"], d["hash"], d["items"], channel="policy",
+                    session_id=None, evidence="Auto-approved by rule(s): " + ", ".join(d["labels"]))
     undo_until = iso(utcnow() + UNDO_WINDOW)
     with tx(conn):
-        pv = P.current_version(conn, proposal_id)["pv"]
+        pv = P.current_version(conn, None, proposal_id)["pv"]
         for rid, n in d["rules"].items():
             conn.execute("INSERT INTO policy_decisions (id, rule_id, proposal_id, approval_id, action_count, decided_at) "
                          "VALUES (?,?,?,?,?,?)", (new_id("pd"), rid, proposal_id, res["approval_id"], n, now_iso()))
@@ -161,7 +166,7 @@ def try_auto_approve(conn: sqlite3.Connection, proposal_id: str) -> dict | None:
             if (at := R.get(a["action_type"])) and at.undo:
                 conn.execute("UPDATE proposed_actions SET undo_until=? WHERE id=?", (undo_until, a["id"]))
         audit(conn, "policy", "approval.auto", "Auto-approved by rule(s): " + ", ".join(d["labels"]), "proposal",
-              proposal_id, {"approval_id": res["approval_id"], "rules": d["rules"]})
+              proposal_id, {"approval_id": res["approval_id"], "rules": d["rules"]}, uid=d["owner"])
     return d | {"approval_id": res["approval_id"], "undo_until": undo_until}
 
 
@@ -176,12 +181,13 @@ def _inverse(a: dict, inverse_type: str) -> P.ActionSpec:
         raise PolicyError(409, "not_undoable", "This action can't be undone automatically.")
     return P.ActionSpec(action_type=inverse_type, args=args, timezone=a["timezone"],
                         expected_effect=f"Undo: {a['expected_effect']}", account_id=a["account_id"],
-                        target_resource=a["target_resource"], reason="Undo requested by AJ")
+                        target_resource=a["target_resource"], reason="Undo requested by the user")
 
 
-def undo(conn: sqlite3.Connection, action_id: str, session_id: str | None = None) -> dict:
-    """AJ pressed Undo: create the inverse action and approve it in the same click (an explicit approval by AJ)."""
-    a = row(conn, "SELECT * FROM proposed_actions WHERE id=?", (action_id,))
+def undo(conn: sqlite3.Connection, uid: str, action_id: str, session_id: str | None = None) -> dict:
+    """The user pressed Undo: create the inverse action and approve it in the same click (their explicit approval)."""
+    a = row(conn, "SELECT a.* FROM proposed_actions a JOIN proposal_versions v ON v.id=a.proposal_version_id "
+                  "JOIN proposals p ON p.id=v.proposal_id WHERE a.id=? AND p.user_id=?", (action_id, uid))
     if not a:
         raise PolicyError(404, "not_found", "Action not found.")
     at = R.get(a["action_type"])
@@ -198,10 +204,10 @@ def undo(conn: sqlite3.Connection, action_id: str, session_id: str | None = None
     pv = row(conn, "SELECT proposal_id FROM proposal_versions WHERE id=?", (a["proposal_version_id"],))
     orig = row(conn, "SELECT conversation_id FROM proposals WHERE id=?", (pv["proposal_id"],))
     with tx(conn):
-        pid = P.create(conn, f"Undo: {a['expected_effect']}", [spec], spec.expected_effect,
+        pid = P.create(conn, uid, f"Undo: {a['expected_effect']}", [spec], spec.expected_effect,
                        conversation_id=orig["conversation_id"])
         conn.execute("UPDATE proposed_actions SET undone_by=? WHERE id=?", (pid, action_id))
-    view = P.view(conn, pid)
-    P.approve(conn, pid, view["version"], view["hash"], [0], channel="button", session_id=session_id,
+    view = P.view(conn, uid, pid)
+    P.approve(conn, uid, pid, view["version"], view["hash"], [0], channel="button", session_id=session_id,
               evidence=f"Undo of {action_id}")
     return {"proposal_id": pid, "idempotent": False}

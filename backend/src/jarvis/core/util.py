@@ -50,10 +50,13 @@ def canonical_hash(obj: Any) -> str:
 
 
 def audit(conn: sqlite3.Connection, actor: str, kind: str, summary: str, entity_type: str | None = None,
-          entity_id: str | None = None, data: dict | None = None) -> None:
+          entity_id: str | None = None, data: dict | None = None, *, uid: str | None = None) -> None:
+    """`uid` is the person the event is attributed to (800-171 3.3.2): the acting user, or the user on whose behalf
+    a worker/policy/mission acted. System events have none."""
     conn.execute(
-        "INSERT INTO audit_events (at, actor, kind, entity_type, entity_id, summary, data) VALUES (?,?,?,?,?,?,?)",
-        (now_iso(), actor, kind, entity_type, entity_id, summary, jdump(data or {})),
+        "INSERT INTO audit_events (at, actor, kind, entity_type, entity_id, summary, data, actor_user_id) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (now_iso(), actor, kind, entity_type, entity_id, summary, jdump(data or {}), uid),
     )
 
 

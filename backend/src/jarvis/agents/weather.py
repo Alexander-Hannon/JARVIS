@@ -1,5 +1,5 @@
 """Weather specialist (read-only). Open-Meteo: free, no account, no API key.
-Only the configured location's coordinates are sent (default Huntsville, AL); nothing about AJ is."""
+Only the user's configured location coordinates are sent; nothing else about them is."""
 from __future__ import annotations
 
 import time
@@ -7,7 +7,8 @@ from datetime import date
 
 import httpx
 
-from jarvis.core.db import jload, row
+from jarvis.config import get_settings
+from jarvis.core import settings as S
 
 API = "https://api.open-meteo.com/v1/forecast"
 DEFAULT_LOCATION = {"name": "Huntsville, AL", "lat": 34.7304, "lon": -86.5861}
@@ -26,14 +27,14 @@ class WeatherUnavailable(Exception):
     pass
 
 
-def location(conn) -> dict:
-    data = jload((row(conn, "SELECT data FROM user_settings WHERE id=1") or {}).get("data"), {}) or {}
-    return data.get("location") or DEFAULT_LOCATION
+def location(conn, uid: str) -> dict | None:
+    """The user's location; the personal edition falls back to AJ's home. Enterprise users set their own."""
+    loc = S.user_data(conn, uid).get("location")
+    return loc or (DEFAULT_LOCATION if get_settings().edition == "personal" else None)
 
 
-def enabled(conn) -> bool:
-    data = jload((row(conn, "SELECT data FROM user_settings WHERE id=1") or {}).get("data"), {}) or {}
-    return data.get("weather", {}).get("enabled", True)
+def enabled(conn, uid: str) -> bool:
+    return bool(S.user_data(conn, uid).get("weather", {}).get("enabled", True)) and location(conn, uid) is not None
 
 
 def fetch(loc: dict, tz: str, client: httpx.Client | None = None) -> dict:

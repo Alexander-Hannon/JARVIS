@@ -60,8 +60,9 @@ def checks(conn: sqlite3.Connection) -> list[dict]:
     out.append(_c("Token encryption key", "ok" if ks["ok"] else "fail",
                   f"source={ks.get('source')} {ks.get('mode', '')} (only secret columns are encrypted; the DB file itself is not — "
                   f"rely on OS disk encryption)", None if ks["ok"] else "Run `jarvis setup-key` or set JARVIS_SECRET_KEY."))
-    owner = row(conn, "SELECT 1 FROM owner WHERE id=1")
-    out.append(_c("Owner account", "ok" if owner else "warn", "configured" if owner else "not set up",
+    owner = row(conn, "SELECT 1 FROM users WHERE role='owner' AND status='active' LIMIT 1")
+    n_users = conn.execute("SELECT COUNT(*) FROM users WHERE status='active'").fetchone()[0]
+    out.append(_c("Owner account", "ok" if owner else "warn", f"configured ({n_users} active user(s))" if owner else "not set up",
                   None if owner else "Open the app on this machine and complete first-run setup."))
     out.append(_c("Network exposure", "ok" if s.host in ("127.0.0.1", "localhost") else "warn",
                   f"bound to {s.host}:{s.port}" + (" (loopback only)" if s.host in ("127.0.0.1", "localhost") else ""),
@@ -87,9 +88,18 @@ def checks(conn: sqlite3.Connection) -> list[dict]:
     out.append(_c("Model provider (Anthropic)", "ok" if ok else "warn", why if not ok else f"configured; model {s.model_default}",
                   None if ok else "Add an API key and choose a budget; offline capture/tasks still work."))
     # integrations
+    # Doctor is an admin view of the whole install: per provider, how many people connected it and whether any are
+    # failing. With a single connection (a personal install) it shows that account's details as before.
     for prov, label in (("todoist", "Todoist"), ("google", "Google (Calendar/Drive)"), ("ics", "Deadline feed (ICS)"),
                         ("github", "GitHub (read-only)")):
-        a = A.get_account(conn, prov)
+        accts = rows(conn, "SELECT id FROM integration_accounts WHERE provider=? AND status!='revoked'", (prov,))
+        if len(accts) > 1:
+            bad = conn.execute("SELECT COUNT(*) FROM integration_accounts WHERE provider=? AND status NOT IN "
+                               "('connected','revoked')", (prov,)).fetchone()[0]
+            out.append(_c(label, "warn" if bad else "ok", f"{len(accts)} people connected; {bad} need attention",
+                          "Ask them to reconnect in Settings → Integrations" if bad else None))
+            continue
+        a = A.get_account_by_id(conn, accts[0]["id"]) if accts else None
         if not a:
             out.append(_c(label, "warn" if prov in ("todoist", "google") else "pending", "not connected",
                           "Settings → Integrations"))

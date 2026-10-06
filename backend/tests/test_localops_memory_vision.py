@@ -129,17 +129,17 @@ def test_memory_edit_forget_pin_export(client, conn):
     assert conn.execute("SELECT content FROM memory_versions WHERE memory_id=? AND version=2", (m["id"],)).fetchone()[0] == "[forgotten]"
 
 
-def test_equal_authority_conflict_kept_and_agent_suggestion_is_hypothesis(conn):
+def test_equal_authority_conflict_kept_and_agent_suggestion_is_hypothesis(client, conn):
     from jarvis.memory import service as M
     conn.execute("BEGIN")
-    a = M.add(conn, "IS 640 grading due every Friday at noon", "fact", "document", source_ref="doc:A")
-    b = M.add(conn, "IS 640 grading due every Friday at 5 PM", "fact", "document", source_ref="doc:B")
-    h = M.add(conn, "AJ probably prefers mornings for grading", "preference", "agent_suggestion")
+    a = M.add(conn, "usr_owner", "IS 640 grading due every Friday at noon", "fact", "document", source_ref="doc:A")
+    b = M.add(conn, "usr_owner", "IS 640 grading due every Friday at 5 PM", "fact", "document", source_ref="doc:B")
+    h = M.add(conn, "usr_owner", "AJ probably prefers mornings for grading", "preference", "agent_suggestion")
     conn.execute("COMMIT")
     assert b["conflicts"] == [a["id"]]
     st = {r["id"]: r["status"] for r in conn.execute("SELECT id, status FROM memories WHERE id IN (?,?,?)", (a["id"], b["id"], h["id"]))}
     assert st[a["id"]] == st[b["id"]] == "conflict" and st[h["id"]] == "hypothesis"
-    M.correct(conn, b["id"], "IS 640 grading due every Friday at 5 PM (confirmed by Yi Tan)")
+    M.correct(conn, "usr_owner", b["id"], "IS 640 grading due every Friday at 5 PM (confirmed by Yi Tan)")
     st = {r["id"]: r["status"] for r in conn.execute("SELECT id, status FROM memories WHERE id IN (?,?)", (a["id"], b["id"]))}
     assert st == {a["id"]: "superseded", b["id"]: "active"}
 

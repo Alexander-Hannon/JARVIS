@@ -14,8 +14,7 @@ import sqlite3
 from pathlib import Path
 
 from jarvis.config import get_settings
-from jarvis.core.db import jdump, jload, row
-from jarvis.core.util import audit, now_iso
+from jarvis.core.util import audit
 
 NAME = re.compile(r"^[a-z][a-z0-9-]{1,39}$")
 MAX_FILES = 50
@@ -48,22 +47,20 @@ def parse(text: str) -> tuple[dict, str]:
     return meta, body.strip()
 
 
-def _settings(conn) -> dict:
-    return jload((row(conn, "SELECT data FROM user_settings WHERE id=1") or {}).get("data"), {}) or {}
+# Skills are installed org-wide by admins; each user can switch individual skills off for themselves.
+def _save_disabled(conn, uid: str, off: set[str]) -> None:
+    from jarvis.core import settings as S
+    S.update_user_data(conn, uid, lambda d: d.setdefault("skills", {}).__setitem__("disabled", sorted(off)))
 
 
-def _save_disabled(conn, disabled: set[str]) -> None:
-    data = _settings(conn)
-    data.setdefault("skills", {})["disabled"] = sorted(disabled)
-    conn.execute("UPDATE user_settings SET data=?, updated_at=? WHERE id=1", (jdump(data), now_iso()))
+def disabled(conn, uid: str) -> set[str]:
+    from jarvis.core import settings as S
+    return set((S.user_data(conn, uid).get("skills") or {}).get("disabled", []))
 
 
-def disabled(conn) -> set[str]:
-    return set((_settings(conn).get("skills") or {}).get("disabled", []))
-
-
-def list_skills(conn) -> list[dict]:
-    off = disabled(conn)
+def list_skills(conn, uid: str | None = None) -> list[dict]:
+    """With uid: `enabled` reflects that user's choice. Without (admin catalog): everything installed."""
+    off = disabled(conn, uid) if uid else set()
     out = []
     for d in sorted(p for p in root().iterdir() if p.is_dir()):
         f = d / "SKILL.md"
@@ -93,8 +90,9 @@ def _validate_tree(src: Path) -> list[Path]:
     return files
 
 
-def install_from_folder(conn: sqlite3.Connection, folder: str) -> dict:
-    """AJ points at a folder on the JARVIS host (authenticated UI). It's copied, so later edits there don't change it."""
+def install_from_folder(conn: sqlite3.Connection, folder: str, by: str | None = None) -> dict:
+    """An admin points at a folder on the JARVIS host (authenticated UI). It's copied, so later edits there don't change
+    it."""
     src = Path(folder).expanduser().resolve()
     if not src.is_dir():
         raise SkillError("not_found", "Folder not found on the JARVIS host.")
@@ -107,33 +105,33 @@ def install_from_folder(conn: sqlite3.Connection, folder: str) -> dict:
     if dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(src, dest, symlinks=False)
-    audit(conn, "user", "skill.installed", f"Skill installed: {name}", "skill", name)
+    audit(conn, "user", "skill.installed", f"Skill installed: {name}", "skill", name, uid=by)
     return next(s for s in list_skills(conn) if s["name"] == name)
 
 
-def write_skill(conn: sqlite3.Connection, name: str, description: str, body: str) -> dict:
-    """Used only by the executor after AJ approved a `skill.install` proposal."""
+def write_skill(conn: sqlite3.Connection, name: str, description: str, body: str, by: str | None = None) -> dict:
+    """Used only by the executor after an approved `skill.install` proposal (org-wide, so it needs an admin approver)."""
     if not NAME.match(name):
         raise SkillError("bad_name", "Skill names: lowercase letters, digits, dashes (2–40).")
     d = root() / name
     d.mkdir(parents=True, exist_ok=True)
     (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {description.strip()[:500]}\n---\n\n{body.strip()}\n")
-    audit(conn, "user", "skill.installed", f"Skill installed from an approved draft: {name}", "skill", name)
+    audit(conn, "user", "skill.installed", f"Skill installed from an approved draft: {name}", "skill", name, uid=by)
     return next(s for s in list_skills(conn) if s["name"] == name)
 
 
-def set_enabled(conn, name: str, enabled: bool) -> list[dict]:
-    off = disabled(conn)
+def set_enabled(conn, uid: str, name: str, enabled: bool) -> list[dict]:
+    off = disabled(conn, uid)
     off = off - {name} if enabled else off | {name}
-    _save_disabled(conn, off)
-    return list_skills(conn)
+    _save_disabled(conn, uid, off)
+    return list_skills(conn, uid)
 
 
-def remove(conn, name: str) -> None:
-    if not NAME.match(name):
-        raise SkillError("bad_name", "Unknown skill.")
+def remove(conn, name: str, by: str | None = None) -> None:
+    if not NAME.match(name) or not (root() / name).is_dir():
+        raise SkillError("not_found", "Unknown skill.")
     shutil.rmtree(root() / name, ignore_errors=True)
-    audit(conn, "user", "skill.removed", f"Skill removed: {name}", "skill", name)
+    audit(conn, "user", "skill.removed", f"Skill removed: {name}", "skill", name, uid=by)
 
 
 def load(name: str) -> dict:

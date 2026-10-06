@@ -9,16 +9,16 @@ from jarvis.knowledge.search import build_match_query, search
 
 def _project(conn, slug, sensitive):
     pid = new_id("prj")
-    conn.execute("INSERT INTO projects (id, slug, name, area, sensitive, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-                 (pid, slug, slug, "coaching", 1 if sensitive else 0, now_iso(), now_iso()))
+    conn.execute("INSERT INTO projects (id, user_id, slug, name, area, sensitive, created_at, updated_at) "
+                 "VALUES (?,'usr_owner',?,?,?,?,?,?)", (pid, slug, slug, "coaching", 1 if sensitive else 0, now_iso(), now_iso()))
     return pid
 
 
 @pytest.mark.parametrize("q", ['"unbalanced', "NEAR(a b)", "regress*", "-foo", "a AND OR NOT", "col:val",
                                "^start", "((", '""', "' OR 1=1 --", "*", "NEAR", "résumé naïve"])
 def test_special_chars_do_not_error(conn, q):
-    ingest_bytes(conn, b"regression diagnostics near the start", "a.txt", None, None)
-    assert isinstance(search(conn, q), list)
+    ingest_bytes(conn, "usr_owner", b"regression diagnostics near the start", "a.txt", None, None)
+    assert isinstance(search(conn, "usr_owner", q), list)
 
 
 def test_query_builder_quotes_tokens():
@@ -28,8 +28,8 @@ def test_query_builder_quotes_tokens():
 
 
 def test_search_returns_bounded_excerpt_and_fields(conn, gen):
-    r = ingest_bytes(conn, gen.markdown_doc(), "notes.md", None, None)
-    hits = search(conn, "problem set friday")
+    r = ingest_bytes(conn, "usr_owner", gen.markdown_doc(), "notes.md", None, None)
+    hits = search(conn, "usr_owner", "problem set friday")
     assert hits
     h = hits[0]
     assert h["document_id"] == r["document_id"] and h["title"] == "notes.md"
@@ -39,26 +39,26 @@ def test_search_returns_bounded_excerpt_and_fields(conn, gen):
 
 
 def test_or_fallback(conn):
-    ingest_bytes(conn, b"only regression here", "a.txt", None, None)
-    assert search(conn, "regression unicorns")
+    ingest_bytes(conn, "usr_owner", b"only regression here", "a.txt", None, None)
+    assert search(conn, "usr_owner", "regression unicorns")
 
 
 def test_sensitive_project_excluded_unless_allowed(conn):
     secret = _project(conn, "coaching-client", True)
     normal = _project(conn, "school", False)
-    ingest_bytes(conn, b"client quarterly goals zebra", "client.txt", None, secret)
-    ingest_bytes(conn, b"school goals zebra", "school.txt", None, normal)
-    titles = {h["title"] for h in search(conn, "zebra")}
+    ingest_bytes(conn, "usr_owner", b"client quarterly goals zebra", "client.txt", None, secret)
+    ingest_bytes(conn, "usr_owner", b"school goals zebra", "school.txt", None, normal)
+    titles = {h["title"] for h in search(conn, "usr_owner", "zebra")}
     assert titles == {"school.txt"}
-    assert {h["title"] for h in search(conn, "zebra", allowed_project_ids={secret})} == {"school.txt", "client.txt"}
-    assert {h["title"] for h in search(conn, "zebra", project_id=secret)} == {"client.txt"}
-    assert {h["title"] for h in search(conn, "zebra", exclude_sensitive_projects=False)} == {"school.txt", "client.txt"}
+    assert {h["title"] for h in search(conn, "usr_owner", "zebra", allowed_project_ids={secret})} == {"school.txt", "client.txt"}
+    assert {h["title"] for h in search(conn, "usr_owner", "zebra", project_id=secret)} == {"client.txt"}
+    assert {h["title"] for h in search(conn, "usr_owner", "zebra", exclude_sensitive_projects=False)} == {"school.txt", "client.txt"}
 
 
 def test_deleted_and_old_versions_excluded(conn):
-    r = ingest_bytes(conn, b"alpha giraffe", "v.txt", None, None)
-    ingest_bytes(conn, b"beta okapi", "v.txt", None, None)
-    assert not search(conn, "giraffe")  # superseded version
-    assert search(conn, "okapi")
-    delete_document(conn, r["document_id"])
-    assert not search(conn, "okapi")
+    r = ingest_bytes(conn, "usr_owner", b"alpha giraffe", "v.txt", None, None)
+    ingest_bytes(conn, "usr_owner", b"beta okapi", "v.txt", None, None)
+    assert not search(conn, "usr_owner", "giraffe")  # superseded version
+    assert search(conn, "usr_owner", "okapi")
+    delete_document(conn, "usr_owner", r["document_id"])
+    assert not search(conn, "usr_owner", "okapi")

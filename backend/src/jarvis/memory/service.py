@@ -2,8 +2,10 @@
 
 Authority order: user direct statement/edit (newest wins) > current project document > seed context >
 agent suggestion (never a user decision). Equal-authority non-user conflicts are both kept with
-status 'conflict' until AJ resolves them. Forget removes the searchable FTS rows and scrubs version
+status 'conflict' until the user resolves them. Forget removes the searchable FTS rows and scrubs version
 text locally; historical backups may still contain it until they are deleted.
+
+Memories are always private to one user: every function takes `uid` and only ever reads or changes that user's rows.
 """
 from __future__ import annotations
 
@@ -51,7 +53,7 @@ def _insert_version(conn, mid: str, version: int, content: str, source_kind: str
     conn.execute("INSERT INTO memory_fts (content, memory_id) VALUES (?,?)", (content, mid))
 
 
-def add(conn: sqlite3.Connection, content: str, type_: str, source_kind: str, *, source_ref: str | None = None,
+def add(conn: sqlite3.Connection, uid: str, content: str, type_: str, source_kind: str, *, source_ref: str | None = None,
         project_id: str | None = None, entity: str | None = None, pinned: bool = False, review_at: str | None = None,
         expires_at: str | None = None, effective_from: str | None = None, supersede_similar: bool = True) -> dict:
     """Create a memory. Returns {id, superseded:[ids], conflicts:[ids]}."""
@@ -65,11 +67,11 @@ def add(conn: sqlite3.Connection, content: str, type_: str, source_kind: str, *,
     superseded, conflicts = [], []
     candidates = []
     if supersede_similar and source_kind != "agent_suggestion":
-        candidates = similar(conn, content, project_id=project_id, entity=entity)
-    conn.execute("INSERT INTO memories (id, project_id, entity, type, status, pinned, confirmed_by_user, scope, created_at, "
-                 "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                 (mid, project_id, entity, type_, status, int(pinned), int(confirmed), "project" if project_id else "global",
-                  now, now))
+        candidates = similar(conn, uid, content, project_id=project_id, entity=entity)
+    conn.execute("INSERT INTO memories (id, user_id, project_id, entity, type, status, pinned, confirmed_by_user, scope, "
+                 "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                 (mid, uid, project_id, entity, type_, status, int(pinned), int(confirmed),
+                  "project" if project_id else "global", now, now))
     _insert_version(conn, mid, 1, content, source_kind, source_ref, review_at, expires_at, effective_from)
     for c in candidates:
         if c["type"] != type_ and not entity:
@@ -88,21 +90,24 @@ def add(conn: sqlite3.Connection, content: str, type_: str, source_kind: str, *,
             conn.execute("UPDATE memories SET conflict_with=? WHERE id=?", (mid, c["id"]))
             conflicts.append(c["id"])
     audit(conn, "user" if confirmed else "model", "memory.created", content[:120], "memory", mid,
-          {"superseded": superseded, "conflicts": conflicts, "source_kind": source_kind})
+          {"superseded": superseded, "conflicts": conflicts, "source_kind": source_kind}, uid=uid)
     return {"id": mid, "superseded": superseded, "conflicts": conflicts}
 
 
-def similar(conn, content: str, project_id: str | None = None, entity: str | None = None, threshold: float = 0.4) -> list[dict]:
+def similar(conn, uid: str, content: str, project_id: str | None = None, entity: str | None = None,
+            threshold: float = 0.4) -> list[dict]:
     if entity:
         return rows(conn, "SELECT m.*, v.content, v.source_kind FROM memories m JOIN memory_versions v ON v.memory_id=m.id "
-                          "AND v.version=m.current_version WHERE m.entity=? AND m.status IN ('active','conflict')", (entity,))
+                          "AND v.version=m.current_version WHERE m.user_id=? AND m.entity=? "
+                          "AND m.status IN ('active','conflict')", (uid, entity))
     q = _fts_query(content)
     if not q:
         return []
     cands = rows(conn, "SELECT m.*, v.content, v.source_kind FROM memory_fts f JOIN memories m ON m.id=f.memory_id "
                        "JOIN memory_versions v ON v.memory_id=m.id AND v.version=m.current_version "
-                       "WHERE memory_fts MATCH ? AND m.status IN ('active','conflict') "
-                       "AND (m.project_id IS ? OR m.project_id IS NULL) ORDER BY bm25(memory_fts) LIMIT 10", (q, project_id))
+                       "WHERE memory_fts MATCH ? AND m.user_id=? AND m.status IN ('active','conflict') "
+                       "AND (m.project_id IS ? OR m.project_id IS NULL) ORDER BY bm25(memory_fts) LIMIT 10",
+                 (q, uid, project_id))
     out = []
     for c in cands:
         cont, n = containment(c["content"], content)
@@ -111,9 +116,9 @@ def similar(conn, content: str, project_id: str | None = None, entity: str | Non
     return out
 
 
-def correct(conn: sqlite3.Connection, memory_id: str, new_content: str, source_kind: str = "user_edit") -> dict:
+def correct(conn: sqlite3.Connection, uid: str, memory_id: str, new_content: str, source_kind: str = "user_edit") -> dict:
     with tx(conn):
-        m = row(conn, "SELECT * FROM memories WHERE id=?", (memory_id,))
+        m = row(conn, "SELECT * FROM memories WHERE id=? AND user_id=?", (memory_id, uid))
         if not m or m["status"] == "forgotten":
             raise KeyError(memory_id)
         v = m["current_version"] + 1
@@ -122,30 +127,34 @@ def correct(conn: sqlite3.Connection, memory_id: str, new_content: str, source_k
                      "type=CASE WHEN type='hypothesis' THEN 'preference' ELSE type END, updated_at=? WHERE id=?",
                      (v, now_iso(), memory_id))
         if m["conflict_with"]:
-            # AJ's correction resolves the conflict in favor of this record.
-            conn.execute("UPDATE memories SET status='superseded', superseded_by=?, conflict_with=NULL, updated_at=? WHERE id=?",
-                         (memory_id, now_iso(), m["conflict_with"]))
+            # The user's correction resolves the conflict in favor of this record.
+            conn.execute("UPDATE memories SET status='superseded', superseded_by=?, conflict_with=NULL, updated_at=? "
+                         "WHERE id=? AND user_id=?", (memory_id, now_iso(), m["conflict_with"], uid))
             conn.execute("DELETE FROM memory_fts WHERE memory_id=?", (m["conflict_with"],))
-        audit(conn, "user", "memory.corrected", f"v{v}: {new_content[:100]}", "memory", memory_id)
-    return get(conn, memory_id)
+        audit(conn, "user", "memory.corrected", f"v{v}: {new_content[:100]}", "memory", memory_id, uid=uid)
+    return get(conn, uid, memory_id)
 
 
-def forget(conn: sqlite3.Connection, memory_id: str) -> None:
+def forget(conn: sqlite3.Connection, uid: str, memory_id: str) -> None:
     with tx(conn):
+        if not row(conn, "SELECT id FROM memories WHERE id=? AND user_id=?", (memory_id, uid)):
+            raise KeyError(memory_id)
         conn.execute("DELETE FROM memory_fts WHERE memory_id=?", (memory_id,))
         conn.execute("UPDATE memory_versions SET content='[forgotten]', source_ref=NULL WHERE memory_id=?", (memory_id,))
         conn.execute("UPDATE memories SET status='forgotten', pinned=0, updated_at=? WHERE id=?", (now_iso(), memory_id))
-        audit(conn, "user", "memory.forgotten", "Memory forgotten (search index + text removed)", "memory", memory_id)
+        audit(conn, "user", "memory.forgotten", "Memory forgotten (search index + text removed)", "memory", memory_id,
+              uid=uid)
 
 
-def set_pinned(conn, memory_id: str, pinned: bool) -> None:
-    conn.execute("UPDATE memories SET pinned=?, updated_at=? WHERE id=?", (int(pinned), now_iso(), memory_id))
+def set_pinned(conn, uid: str, memory_id: str, pinned: bool) -> bool:
+    return conn.execute("UPDATE memories SET pinned=?, updated_at=? WHERE id=? AND user_id=?",
+                        (int(pinned), now_iso(), memory_id, uid)).rowcount > 0
 
 
-def get(conn, memory_id: str, with_versions: bool = True) -> dict | None:
+def get(conn, uid: str, memory_id: str, with_versions: bool = True) -> dict | None:
     m = row(conn, "SELECT m.*, v.content, v.source_kind, v.source_ref, v.observed_at, v.review_at, v.expires_at, "
                   "v.effective_from FROM memories m JOIN memory_versions v ON v.memory_id=m.id AND v.version=m.current_version "
-                  "WHERE m.id=?", (memory_id,))
+                  "WHERE m.id=? AND m.user_id=?", (memory_id, uid))
     if m and with_versions:
         m["versions"] = rows(conn, "SELECT version, content, source_kind, observed_at FROM memory_versions WHERE memory_id=? "
                                    "ORDER BY version", (memory_id,))
@@ -155,11 +164,11 @@ def get(conn, memory_id: str, with_versions: bool = True) -> dict | None:
     return m
 
 
-def list_(conn, q: str | None = None, status: str | None = None, project_id: str | None = None, limit: int = 200) -> list[dict]:
-    params: list = []
+def list_(conn, uid: str, q: str | None = None, status: str | None = None, project_id: str | None = None, limit: int = 200) -> list[dict]:
+    params: list = [uid]
     base = ("SELECT m.*, v.content, v.source_kind, v.source_ref, v.observed_at, v.review_at, v.expires_at FROM memories m "
             "JOIN memory_versions v ON v.memory_id=m.id AND v.version=m.current_version")
-    where = []
+    where = ["m.user_id=?"]
     if q:
         fq = _fts_query(q)
         if not fq:
@@ -175,7 +184,7 @@ def list_(conn, q: str | None = None, status: str | None = None, project_id: str
     if project_id:
         where.append("m.project_id=?")
         params.append(project_id)
-    sql = base + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY m.pinned DESC, m.updated_at DESC LIMIT ?"
+    sql = base + " WHERE " + " AND ".join(where) + " ORDER BY m.pinned DESC, m.updated_at DESC LIMIT ?"
     params.append(limit)
     out = rows(conn, sql, params)
     for m in out:
@@ -184,21 +193,21 @@ def list_(conn, q: str | None = None, status: str | None = None, project_id: str
     return out
 
 
-def relevant(conn, text: str, project_ids: list[str] | None = None, limit: int = 8) -> list[dict]:
+def relevant(conn, uid: str, text: str, project_ids: list[str] | None = None, limit: int = 8) -> list[dict]:
     """Bounded context for a run: pinned + FTS matches, active only, never other sensitive projects."""
     pinned = rows(conn, "SELECT m.id, m.type, m.project_id, v.content, v.source_kind, v.observed_at FROM memories m "  # nosec B608 fixed clauses; values bound
                         "JOIN memory_versions v ON v.memory_id=m.id AND v.version=m.current_version "
-                        "WHERE m.pinned=1 AND m.status='active' AND (m.project_id IS NULL OR m.project_id IN "
-                        f"({','.join('?' * len(project_ids or []))})) LIMIT ?", [*(project_ids or []), limit])
+                        "WHERE m.user_id=? AND m.pinned=1 AND m.status='active' AND (m.project_id IS NULL OR m.project_id IN "
+                        f"({','.join('?' * len(project_ids or []))})) LIMIT ?", [uid, *(project_ids or []), limit])
     hits = []
     fq = _fts_query(text)
     if fq:
         hits = rows(conn, "SELECT m.id, m.type, m.project_id, v.content, v.source_kind, v.observed_at FROM memory_fts f "
                           "JOIN memories m ON m.id=f.memory_id JOIN memory_versions v ON v.memory_id=m.id AND "
-                          "v.version=m.current_version WHERE memory_fts MATCH ? AND m.status IN ('active','conflict') "
-                          "ORDER BY bm25(memory_fts) LIMIT ?", (fq, limit))
+                          "v.version=m.current_version WHERE memory_fts MATCH ? AND m.user_id=? "
+                          "AND m.status IN ('active','conflict') ORDER BY bm25(memory_fts) LIMIT ?", (fq, uid, limit))
         allowed = set(project_ids or [])
-        sensitive = {r["id"] for r in rows(conn, "SELECT id FROM projects WHERE sensitive=1")}
+        sensitive = {r["id"] for r in rows(conn, "SELECT id FROM projects WHERE sensitive=1 AND user_id=?", (uid,))}
         hits = [h for h in hits if not h["project_id"] or h["project_id"] in allowed or h["project_id"] not in sensitive]
     seen, out = set(), []
     for m in pinned + hits:
@@ -208,8 +217,8 @@ def relevant(conn, text: str, project_ids: list[str] | None = None, limit: int =
     return out[:limit]
 
 
-def export_markdown(conn, ids: list[str] | None = None) -> str:
-    items = list_(conn, limit=10000) if not ids else [get(conn, i, with_versions=False) for i in ids]
+def export_markdown(conn, uid: str, ids: list[str] | None = None) -> str:
+    items = list_(conn, uid, limit=10000) if not ids else [get(conn, uid, i, with_versions=False) for i in ids]
     lines = ["# Jarvis memory export", ""]
     for m in items:
         if not m:

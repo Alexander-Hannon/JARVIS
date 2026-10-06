@@ -34,7 +34,7 @@ def propose_tasks(run, tasks: list[dict]):
         cs.append(Commitment(text=f"{content} {t.get('when_phrase') or ''}".strip(), content=content, when=w,
                              area=detect_area(content + " " + run.said)))
     if cs:
-        specs, assumptions, _ = S.propose_tasks(run.conn, cs, run.tz)
+        specs, assumptions, _ = S.propose_tasks(run.conn, run.uid, cs, run.tz)
         for sp, t in zip(specs, [t for t in tasks if not any(r.get("content") == t.get("content") for r in rejected)]):
             if t.get("note"):
                 sp.args["description"] = ((sp.args.get("description") or "") + "\n" + t["note"]).strip()
@@ -64,7 +64,7 @@ def propose_calendar_block(run, summary: str, when_phrase: str, minutes: int, pa
     if part_of_day and not w.part_of_day:
         w.part_of_day = part_of_day
     c = Commitment(text=f"{summary} {when_phrase}", content=summary, when=w, area=detect_area(summary), kind="event")
-    r = S.propose_event(run.conn, c, run.tz)
+    r = S.propose_event(run.conn, run.uid, c, run.tz)
     run.specs += r["specs"]
     run.assumptions += r["assumptions"]
     run_event(run.conn, run.run_id, "tool", "Checked free time and prepared a calendar block" if r["specs"]
@@ -77,7 +77,7 @@ def propose_calendar_block(run, summary: str, when_phrase: str, minutes: int, pa
       obj({"task_query": {"type": "string"}}, ["task_query"]), risk="propose", family="tasks",
       example="I finished the lab report.")
 def propose_complete_task(run, task_query: str):
-    r = S.propose_completion(run.conn, task_query, run.tz)
+    r = S.propose_completion(run.conn, run.uid, task_query, run.tz)
     run.specs += r["specs"]
     return {"result": r["message"], "proposed": bool(r["specs"])}
 
@@ -88,12 +88,12 @@ def propose_complete_task(run, task_query: str):
 def propose_note(run, title: str, content: str):
     from jarvis.actions.proposals import ActionSpec
     from jarvis.localops import files as F
-    roots = [r for r in F.list_roots(run.conn) if r["writable"]]
+    roots = [r for r in F.list_roots(run.conn, run.uid) if r["writable"]]
     if not roots:
         return {"error": "No writable workspace folder designated (Settings → Local files)."}
     safe = re.sub(r"[^\w\- ]+", "", title).strip() or "note"
     try:
-        plan = F.plan_write(run.conn, roots[0]["id"], f"Notes/{safe}.md", f"# {title}\n\n{content}\n")
+        plan = F.plan_write(run.conn, run.uid, roots[0]["id"], f"Notes/{safe}.md", f"# {title}\n\n{content}\n")
     except F.FileOpError as e:
         return {"error": e.message}
     run.specs.append(ActionSpec(action_type="file.write", args=plan["args"], timezone=run.tz, target_resource=roots[0]["id"],

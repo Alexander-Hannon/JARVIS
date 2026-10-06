@@ -7,6 +7,9 @@ Invariants enforced here (application code, not prompts):
 - Approval requires: current version, matching hash, not expired, actions not paused, every selected
   item free of missing fields, and (for voice/typed) that this exact version was presented first.
 - Approving the same version+selection twice is idempotent (no re-asking, no duplicate jobs).
+- Proposals belong to one user. Public functions take `uid` and treat anyone else's proposal as not found (404);
+  only that user can approve it (V5 `dual` types additionally need a second approver). Every item's account must be
+  the proposer's own. Internal callers (executor, worker) pass uid=None.
 """
 from __future__ import annotations
 
@@ -81,23 +84,43 @@ def _insert_version(conn, proposal_id: str, version: int, specs: list[ActionSpec
     return vid
 
 
-def create(conn: sqlite3.Connection, title: str, specs: list[ActionSpec], summary: str, *, conversation_id: str | None,
+def _check_accounts(conn, uid: str, specs: list[ActionSpec]) -> None:
+    """Writes may only target the proposer's own accounts (the executor re-checks at execution time)."""
+    for s in specs:
+        if s.account_id:
+            a = row(conn, "SELECT user_id FROM integration_accounts WHERE id=?", (s.account_id,))
+            if not a or a["user_id"] != uid:
+                raise ProposalError(400, "account_not_yours", "That action targets an account that isn't yours.")
+
+
+def create(conn: sqlite3.Connection, uid: str, title: str, specs: list[ActionSpec], summary: str, *,
+           conversation_id: str | None,
            run_id: str | None = None, capture_id: str | None = None, reason: str | None = None,
            assumptions: list[str] | None = None, questions: list[str] | None = None, source: dict | None = None,
            origin: str = "command") -> str:
+    _check_accounts(conn, uid, specs)
     pid = new_id("prop")
     now = now_iso()
-    conn.execute("INSERT INTO proposals (id, conversation_id, run_id, capture_id, status, current_version, title, created_at, "
-                 "updated_at, origin) VALUES (?,?,?,?, 'proposed', 1, ?,?,?,?)",
-                 (pid, conversation_id, run_id, capture_id, title, now, now, origin))
+    conn.execute("INSERT INTO proposals (id, user_id, conversation_id, run_id, capture_id, status, current_version, title, "
+                 "created_at, updated_at, origin) VALUES (?,?,?,?,?, 'proposed', 1, ?,?,?,?)",
+                 (pid, uid, conversation_id, run_id, capture_id, title, now, now, origin))
     _insert_version(conn, pid, 1, specs, summary, reason, assumptions or [], questions or [], source or {})
     audit(conn, "model" if run_id else "user", "proposal.created", f"Proposed: {title}", "proposal", pid,
-          {"items": [s.action_type for s in specs]})
+          {"items": [s.action_type for s in specs]}, uid=uid)
     return pid
 
 
-def current_version(conn, proposal_id: str) -> dict:
-    p = row(conn, "SELECT * FROM proposals WHERE id=?", (proposal_id,))
+def owner_of(conn, proposal_id: str) -> str | None:
+    r = row(conn, "SELECT user_id FROM proposals WHERE id=?", (proposal_id,))
+    return r["user_id"] if r else None
+
+
+def current_version(conn, uid: str | None, proposal_id: str) -> dict:
+    """`uid` scopes the lookup to that user's proposals; None is for internal callers (executor/worker) only."""
+    if uid is None:
+        p = row(conn, "SELECT * FROM proposals WHERE id=?", (proposal_id,))
+    else:
+        p = row(conn, "SELECT * FROM proposals WHERE id=? AND user_id=?", (proposal_id, uid))
     if not p:
         raise ProposalError(404, "not_found", "Proposal not found.")
     v = row(conn, "SELECT * FROM proposal_versions WHERE proposal_id=? AND version=?", (proposal_id, p["current_version"]))
@@ -128,15 +151,17 @@ def specs_from_actions(actions: list[dict]) -> list[ActionSpec]:
     return specs
 
 
-def mark_presented(conn, proposal_id: str) -> None:
-    p = current_version(conn, proposal_id)
+def mark_presented(conn, uid: str | None, proposal_id: str) -> None:
+    p = current_version(conn, uid, proposal_id)
     conn.execute("UPDATE proposal_versions SET presented_at=? WHERE id=? AND presented_at IS NULL", (now_iso(), p["pv"]["id"]))
 
 
-def revise(conn: sqlite3.Connection, proposal_id: str, specs: list[ActionSpec], reason: str, *, summary: str | None = None,
-           assumptions: list[str] | None = None, questions: list[str] | None = None, actor: str = "user") -> int:
+def revise(conn: sqlite3.Connection, uid: str, proposal_id: str, specs: list[ActionSpec], reason: str, *,
+           summary: str | None = None, assumptions: list[str] | None = None, questions: list[str] | None = None,
+           actor: str = "user") -> int:
     with tx(conn):
-        p = current_version(conn, proposal_id)
+        p = current_version(conn, uid, proposal_id)
+        _check_accounts(conn, uid, specs)
         acts = actions_for_version(conn, p["pv"]["id"])
         started = [a for a in acts if a["state"] in ("executing", "verified", "unknown", "failed", "conflict")]
         if started or p["status"] not in ("proposed", "approved", "queued"):
@@ -152,7 +177,7 @@ def revise(conn: sqlite3.Connection, proposal_id: str, specs: list[ActionSpec], 
                         questions if questions is not None else [], jload(p["pv"]["source"], {}))
         conn.execute("UPDATE proposals SET current_version=?, status='proposed', updated_at=?, row_version=row_version+1 "
                      "WHERE id=?", (new_v, now_iso(), proposal_id))
-        audit(conn, actor, "proposal.revised", f"Revised to v{new_v}: {reason}", "proposal", proposal_id)
+        audit(conn, actor, "proposal.revised", f"Revised to v{new_v}: {reason}", "proposal", proposal_id, uid=uid)
     return new_v
 
 
@@ -172,10 +197,11 @@ def control_paused(conn) -> bool:
     return bool(r and r["actions_paused"])
 
 
-def approve(conn: sqlite3.Connection, proposal_id: str, version: int, hash_: str, selected_items: list[int], *,
+def approve(conn: sqlite3.Connection, uid: str, proposal_id: str, version: int, hash_: str, selected_items: list[int], *,
             channel: str, session_id: str | None, evidence: str | None = None) -> dict:
+    """`uid` is the approver: the proposal's owner (for channel 'policy', the owner's own rule)."""
     with tx(conn):
-        p = current_version(conn, proposal_id)
+        p = current_version(conn, uid, proposal_id)
         pv = p["pv"]
         if version != p["current_version"] or hash_ != pv["hash"]:
             raise ProposalError(409, "stale_version",
@@ -209,8 +235,8 @@ def approve(conn: sqlite3.Connection, proposal_id: str, version: int, hash_: str
             raise ProposalError(409, "bad_state", f"Proposal is {p['status']}.")
         aid = new_id("appr")
         conn.execute("INSERT INTO approvals (id, proposal_version_id, proposal_hash, selected_items, channel, session_id, "
-                     "evidence, created_at) VALUES (?,?,?,?,?,?,?,?)",
-                     (aid, pv["id"], pv["hash"], jdump(sel), channel, session_id, (evidence or "")[:500], now_iso()))
+                     "evidence, created_at, approved_by) VALUES (?,?,?,?,?,?,?,?,?)",
+                     (aid, pv["id"], pv["hash"], jdump(sel), channel, session_id, (evidence or "")[:500], now_iso(), uid))
         for idx, a in acts.items():
             if idx in sel:
                 conn.execute("UPDATE proposed_actions SET state='queued', updated_at=? WHERE id=?", (now_iso(), a["id"]))
@@ -220,14 +246,15 @@ def approve(conn: sqlite3.Connection, proposal_id: str, version: int, hash_: str
                 conn.execute("UPDATE proposed_actions SET state='skipped', updated_at=? WHERE id=?", (now_iso(), a["id"]))
         conn.execute("UPDATE proposals SET status='queued', updated_at=?, row_version=row_version+1 WHERE id=?",
                      (now_iso(), proposal_id))
-        audit(conn, "user", "approval.granted", f"Approved v{version} items {[i + 1 for i in sel]} via {channel}",
-              "proposal", proposal_id, {"hash": pv["hash"], "approval_id": aid})
+        audit(conn, "policy" if channel == "policy" else "user", "approval.granted",
+              f"Approved v{version} items {[i + 1 for i in sel]} via {channel}", "proposal", proposal_id,
+              {"hash": pv["hash"], "approval_id": aid}, uid=uid)
         return {"approval_id": aid, "idempotent": False}
 
 
-def reject(conn: sqlite3.Connection, proposal_id: str, actor: str = "user") -> None:
+def reject(conn: sqlite3.Connection, uid: str, proposal_id: str, actor: str = "user") -> None:
     with tx(conn):
-        p = current_version(conn, proposal_id)
+        p = current_version(conn, uid, proposal_id)
         acts = actions_for_version(conn, p["pv"]["id"])
         if any(a["state"] in ("executing", "verified", "unknown") for a in acts):
             raise ProposalError(409, "already_executing",
@@ -236,14 +263,14 @@ def reject(conn: sqlite3.Connection, proposal_id: str, actor: str = "user") -> N
         conn.execute("UPDATE proposed_actions SET state='cancelled', updated_at=? WHERE proposal_version_id=? AND state IN "
                      "('proposed','queued','approved','paused')", (now_iso(), p["pv"]["id"]))
         conn.execute("UPDATE proposals SET status='rejected', updated_at=? WHERE id=?", (now_iso(), proposal_id))
-        audit(conn, actor, "proposal.rejected", f"Rejected: {p['title']}", "proposal", proposal_id)
+        audit(conn, actor, "proposal.rejected", f"Rejected: {p['title']}", "proposal", proposal_id, uid=uid)
 
 
-def retry(conn: sqlite3.Connection, proposal_id: str, items: list[int]) -> list[str]:
+def retry(conn: sqlite3.Connection, uid: str, proposal_id: str, items: list[int]) -> list[str]:
     with tx(conn):
         if control_paused(conn):
             raise ProposalError(423, "paused", "Actions are paused.")
-        p = current_version(conn, proposal_id)
+        p = current_version(conn, uid, proposal_id)
         appr = row(conn, "SELECT * FROM approvals WHERE proposal_version_id=? AND revoked_at IS NULL", (p["pv"]["id"],))
         if not appr:
             raise ProposalError(409, "no_approval", "Nothing approved to retry.")
@@ -264,7 +291,8 @@ def retry(conn: sqlite3.Connection, proposal_id: str, items: list[int]) -> list[
             queued.append(a["id"])
         if queued:
             conn.execute("UPDATE proposals SET status='queued', updated_at=? WHERE id=?", (now_iso(), proposal_id))
-            audit(conn, "user", "proposal.retry", f"Retry requested for {len(queued)} item(s)", "proposal", proposal_id)
+            audit(conn, "user", "proposal.retry", f"Retry requested for {len(queued)} item(s)", "proposal", proposal_id,
+                  uid=uid)
         return queued
 
 
@@ -278,7 +306,7 @@ def expire_stale(conn: sqlite3.Connection) -> int:
 
 
 def recompute_status(conn: sqlite3.Connection, proposal_id: str) -> str:
-    p = current_version(conn, proposal_id)
+    p = current_version(conn, None, proposal_id)
     states = [a["state"] for a in actions_for_version(conn, p["pv"]["id"]) if a["state"] not in ("skipped",)]
     if not states:
         status = p["status"]
@@ -299,8 +327,8 @@ def recompute_status(conn: sqlite3.Connection, proposal_id: str) -> str:
 
 
 # ---------- views ----------
-def view(conn: sqlite3.Connection, proposal_id: str) -> dict[str, Any]:
-    p = current_version(conn, proposal_id)
+def view(conn: sqlite3.Connection, uid: str | None, proposal_id: str) -> dict[str, Any]:
+    p = current_version(conn, uid, proposal_id)
     pv = p["pv"]
     acts = actions_for_version(conn, pv["id"])
     appr = row(conn, "SELECT id, selected_items, channel, created_at FROM approvals WHERE proposal_version_id=? "
@@ -332,11 +360,11 @@ def view(conn: sqlite3.Connection, proposal_id: str) -> dict[str, Any]:
             "created_at": p["created_at"], "items": items, "versions": versions, "approval": appr}
 
 
-def active_for_conversation(conn, conversation_id: str) -> dict | None:
-    return row(conn, "SELECT id FROM proposals WHERE conversation_id=? AND status='proposed' ORDER BY created_at DESC LIMIT 1",
-               (conversation_id,))
+def active_for_conversation(conn, uid: str, conversation_id: str) -> dict | None:
+    return row(conn, "SELECT id FROM proposals WHERE user_id=? AND conversation_id=? AND status='proposed' "
+                     "ORDER BY created_at DESC LIMIT 1", (uid, conversation_id))
 
 
-def latest_for_conversation(conn, conversation_id: str) -> dict | None:
-    return row(conn, "SELECT id, status FROM proposals WHERE conversation_id=? ORDER BY created_at DESC LIMIT 1",
-               (conversation_id,))
+def latest_for_conversation(conn, uid: str, conversation_id: str) -> dict | None:
+    return row(conn, "SELECT id, status FROM proposals WHERE user_id=? AND conversation_id=? ORDER BY created_at DESC "
+                     "LIMIT 1", (uid, conversation_id))

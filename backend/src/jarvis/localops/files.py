@@ -60,30 +60,43 @@ def validate_root(path: str) -> Path:
     return rp
 
 
-def add_root(conn, path: str, label: str, writable: bool) -> dict:
+# Workspace roots are folders on the machine running Jarvis. Only admins designate them (org.integrations), and each
+# one is assigned to exactly one user: only that user's agent can read it or propose writes into it.
+def _view(r: dict) -> dict:
+    return {"id": r["id"], "path": r["resource_id"], "label": r["resource_name"], "writable": r["access"] == "write",
+            "user_id": r["user_id"]}
+
+
+def add_root(conn, uid: str, path: str, label: str, writable: bool, *, by: str | None = None) -> dict:
     rp = validate_root(path)
     gid = new_id("root")
-    conn.execute("INSERT INTO scope_grants (id, account_id, resource_type, resource_id, resource_name, access, created_at) "
-                 "VALUES (?,NULL,'local_root',?,?,?,?)", (gid, str(rp), label, "write" if writable else "read", now_iso()))
+    conn.execute("INSERT INTO scope_grants (id, account_id, resource_type, resource_id, resource_name, access, created_at, "
+                 "user_id) VALUES (?,NULL,'local_root',?,?,?,?,?)",
+                 (gid, str(rp), label, "write" if writable else "read", now_iso(), uid))
     audit(conn, "user", "localops.root_added", f"Workspace root {label} ({'read/write' if writable else 'read-only'})",
-          "scope_grant", gid)
-    return {"id": gid, "path": str(rp), "label": label, "writable": writable}
+          "scope_grant", gid, {"assigned_to": uid}, uid=by or uid)
+    return {"id": gid, "path": str(rp), "label": label, "writable": writable, "user_id": uid}
 
 
-def list_roots(conn) -> list[dict]:
-    return [{"id": r["id"], "path": r["resource_id"], "label": r["resource_name"], "writable": r["access"] == "write"}
-            for r in rows(conn, "SELECT * FROM scope_grants WHERE resource_type='local_root' ORDER BY created_at")]
+def list_roots(conn, uid: str) -> list[dict]:
+    return [_view(r) for r in rows(conn, "SELECT * FROM scope_grants WHERE resource_type='local_root' AND user_id=? "
+                                         "ORDER BY created_at", (uid,))]
 
 
-def get_root(conn, root_id: str) -> dict:
-    r = row(conn, "SELECT * FROM scope_grants WHERE id=? AND resource_type='local_root'", (root_id,))
+def list_all_roots(conn) -> list[dict]:
+    """Admin view: every designated root and who it's assigned to."""
+    return [_view(r) for r in rows(conn, "SELECT * FROM scope_grants WHERE resource_type='local_root' ORDER BY created_at")]
+
+
+def get_root(conn, uid: str, root_id: str) -> dict:
+    r = row(conn, "SELECT * FROM scope_grants WHERE id=? AND resource_type='local_root' AND user_id=?", (root_id, uid))
     if not r:
         raise FileOpError("no_root", "Unknown workspace root.")
-    return {"id": r["id"], "path": r["resource_id"], "label": r["resource_name"], "writable": r["access"] == "write"}
+    return _view(r)
 
 
-def remove_root(conn, root_id: str) -> None:
-    conn.execute("DELETE FROM scope_grants WHERE id=? AND resource_type='local_root'", (root_id,))
+def remove_root(conn, root_id: str) -> bool:
+    return conn.execute("DELETE FROM scope_grants WHERE id=? AND resource_type='local_root'", (root_id,)).rowcount > 0
 
 
 def _is_secretish(name: str) -> bool:
@@ -185,9 +198,9 @@ def diff_preview(old: str | None, new: str, rel: str) -> str:
     return "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), f"a/{rel}", f"b/{rel}"))[:8000]
 
 
-def plan_write(conn, root_id: str, rel: str, content: str, allow_overwrite: bool = False) -> dict:
+def plan_write(conn, uid: str, root_id: str, rel: str, content: str, allow_overwrite: bool = False) -> dict:
     """Build args/before/after for a file.write proposal (no side effects)."""
-    root = get_root(conn, root_id)
+    root = get_root(conn, uid, root_id)
     if not root["writable"]:
         raise FileOpError("read_only", f"Workspace '{root['label']}' is read-only.")
     if len(content.encode()) > MAX_WRITE:
@@ -207,8 +220,8 @@ def plan_write(conn, root_id: str, rel: str, content: str, allow_overwrite: bool
             "diff": diff_preview(old, content, rel), "root": root}
 
 
-def plan_move(conn, root_id: str, src: str, dst: str) -> dict:
-    root = get_root(conn, root_id)
+def plan_move(conn, uid: str, root_id: str, src: str, dst: str) -> dict:
+    root = get_root(conn, uid, root_id)
     if not root["writable"]:
         raise FileOpError("read_only", f"Workspace '{root['label']}' is read-only.")
     s = resolve_in_root(root, src)
@@ -239,7 +252,7 @@ def execute_action(conn: sqlite3.Connection, a: dict, reconcile_first: bool) -> 
     from jarvis.actions.executor import Blocked
     args = a["args"]
     try:
-        root = get_root(conn, args["root_id"])
+        root = get_root(conn, a["user_id"], args["root_id"])    # the proposal owner's root, re-checked at execution
         if not root["writable"]:
             raise Blocked("failed", "Workspace is read-only.")
         if a["action_type"] == "file.write":
