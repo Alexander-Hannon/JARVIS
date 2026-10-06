@@ -44,6 +44,9 @@ class ActionType:
     grant_always: bool = False            # require the grant even when no target_resource is set
     undo: str | None = None               # name of the inverse action type, when reversible
     reaches_others: bool = False          # visible to anyone besides AJ (send/post/invite) => hard T2 floor
+    # V5 org-impacting types: after the owner approves, a *different* person holding `co_approver_perm` must co-approve
+    # (the executor re-checks both). Such types can never be T1.
+    co_approver_perm: str | None = None
 
     def resolve_handler(self) -> Callable:
         mod, fn = self.handler.split(":")
@@ -57,6 +60,8 @@ REGISTRY: dict[str, ActionType] = {}
 def register(at: ActionType) -> ActionType:
     if at.reaches_others and at.tier < Tier.T2:
         raise ValueError(f"{at.name}: actions that reach other people can never be T1")
+    if at.co_approver_perm and at.tier < Tier.T2:
+        raise ValueError(f"{at.name}: org-impacting actions need explicit approvals and can never be T1")
     if at.name in REGISTRY and REGISTRY[at.name] != at:
         raise ValueError(f"conflicting registration for {at.name}")
     REGISTRY[at.name] = at
@@ -134,9 +139,10 @@ register(ActionType("sandbox.network", "sandbox", "jarvis.actions.handlers_sandb
                     "Open the sandbox's internet access to specific domains for a while"))
 
 
-# A skill becomes standing instructions for the agent: always AJ's explicit review of the exact text.
+# A skill becomes standing instructions for every user's agent: the proposer reviews the exact text, then an admin
+# co-approves it (org-wide change). An admin's own proposal still needs a second admin.
 register(ActionType("skill.install", "skills", "jarvis.actions.handlers_sandbox:h_skill_install", Tier.T2, "native",
-                    "Install a skill (saved instructions JARVIS will follow)"))
+                    "Install a skill (saved instructions JARVIS will follow)", co_approver_perm="org.integrations"))
 
 
 def get(name: str) -> ActionType | None:

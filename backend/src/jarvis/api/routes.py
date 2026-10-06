@@ -642,6 +642,27 @@ def reject(pid: str, me: Principal = Depends(principal), conn=Depends(db)):
     return P.view(conn, me.user_id, pid)
 
 
+class CoApproveIn(BaseModel):
+    version: int
+    hash: str
+    decision: str = Field("approve", pattern="^(approve|decline)$")
+
+
+@router.get("/approvals/co")
+def co_approvals(me: Principal = Depends(principal), conn=Depends(db)):
+    """Org-impacting proposals from other people that you're allowed to co-approve (e.g. skill installs for admins)."""
+    return P.pending_co_approvals(conn, me.user_id, me.can)
+
+
+@router.post("/approvals/co/{pid}")
+def co_approve(pid: str, body: CoApproveIn, me: Principal = Depends(principal), conn=Depends(db)):
+    try:
+        return P.co_approve(conn, me.user_id, me.can, pid, body.version, body.hash, decision=body.decision,
+                            session_id=me.session_id)
+    except P.ProposalError as e:
+        _perr(e)
+
+
 class ReviseItem(BaseModel):
     index: int
     args: dict[str, Any] | None = None

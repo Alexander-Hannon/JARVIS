@@ -99,7 +99,7 @@ def _id_for(path: str, ids: dict) -> str:
         return ids["mission"]
     if path.startswith("/api/projects/"):
         return ids["project"]
-    if path.startswith("/api/proposals/"):
+    if path.startswith(("/api/proposals/", "/api/approvals/co/")):
         return ids["proposal"]
     if path.startswith("/api/schedules/"):
         return ids["schedule"]
@@ -172,7 +172,9 @@ def test_other_user_cannot_see_or_touch_anything(client, world, conn, role):
         url = path
         for p in params:
             url = url.replace("{" + p + "}", _id_for(path, ids))
-        if (method, path) == ("POST", "/api/proposals/{pid}/approve"):
+        if (method, path) == ("POST", "/api/approvals/co/{pid}"):
+            body = {"version": 1, "hash": ids["proposal_hash"]}
+        elif (method, path) == ("POST", "/api/proposals/{pid}/approve"):
             body = {"version": 1, "hash": ids["proposal_hash"], "selected_items": [0]}
         else:
             body = BODIES.get((method, path), {})

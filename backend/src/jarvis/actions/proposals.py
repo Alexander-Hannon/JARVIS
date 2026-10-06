@@ -164,7 +164,7 @@ def revise(conn: sqlite3.Connection, uid: str, proposal_id: str, specs: list[Act
         _check_accounts(conn, uid, specs)
         acts = actions_for_version(conn, p["pv"]["id"])
         started = [a for a in acts if a["state"] in ("executing", "verified", "unknown", "failed", "conflict")]
-        if started or p["status"] not in ("proposed", "approved", "queued"):
+        if started or p["status"] not in ("proposed", "approved", "queued", "awaiting_co_approval"):
             raise ProposalError(409, "not_revisable",
                                 "This plan already started executing; changes need a new proposal (undo is a separate action).")
         _void_approvals_and_jobs(conn, p["pv"]["id"], "superseded by revision")
@@ -218,7 +218,8 @@ def approve(conn: sqlite3.Connection, uid: str, proposal_id: str, version: int, 
         sel = sorted(set(selected_items))
         if not sel or any(i not in acts for i in sel):
             raise ProposalError(400, "bad_selection", "Select at least one listed item.")
-        existing = row(conn, "SELECT * FROM approvals WHERE proposal_version_id=? AND revoked_at IS NULL", (pv["id"],))
+        existing = row(conn, "SELECT * FROM approvals WHERE proposal_version_id=? AND kind='primary' AND revoked_at IS NULL",
+                       (pv["id"],))
         if existing:
             if jload(existing["selected_items"]) == sel:
                 return {"approval_id": existing["id"], "idempotent": True}
@@ -237,6 +238,16 @@ def approve(conn: sqlite3.Connection, uid: str, proposal_id: str, version: int, 
         conn.execute("INSERT INTO approvals (id, proposal_version_id, proposal_hash, selected_items, channel, session_id, "
                      "evidence, created_at, approved_by) VALUES (?,?,?,?,?,?,?,?,?)",
                      (aid, pv["id"], pv["hash"], jdump(sel), channel, session_id, (evidence or "")[:500], now_iso(), uid))
+        if co_perms_needed(acts[i]["action_type"] for i in sel):
+            # Org-impacting: the owner has approved; nothing runs until a different, permitted person co-approves.
+            for idx, a in acts.items():
+                conn.execute("UPDATE proposed_actions SET state=?, updated_at=? WHERE id=?",
+                             ("approved" if idx in sel else "skipped", now_iso(), a["id"]))
+            conn.execute("UPDATE proposals SET status='awaiting_co_approval', updated_at=?, row_version=row_version+1 "
+                         "WHERE id=?", (now_iso(), proposal_id))
+            audit(conn, "user", "approval.granted", f"Approved v{version}; waiting for a co-approver", "proposal",
+                  proposal_id, {"hash": pv["hash"], "approval_id": aid}, uid=uid)
+            return {"approval_id": aid, "idempotent": False, "awaiting_co_approval": True}
         for idx, a in acts.items():
             if idx in sel:
                 conn.execute("UPDATE proposed_actions SET state='queued', updated_at=? WHERE id=?", (now_iso(), a["id"]))
@@ -250,6 +261,82 @@ def approve(conn: sqlite3.Connection, uid: str, proposal_id: str, version: int, 
               f"Approved v{version} items {[i + 1 for i in sel]} via {channel}", "proposal", proposal_id,
               {"hash": pv["hash"], "approval_id": aid}, uid=uid)
         return {"approval_id": aid, "idempotent": False}
+
+
+def co_perms_needed(action_types) -> set[str]:
+    """Co-approval applies to company installs. A personal install is one person by design, so their own explicit
+    approval stays sufficient there (as in V4)."""
+    from jarvis.config import get_settings
+    if get_settings().edition != "enterprise":
+        return set()
+    return {at.co_approver_perm for t in action_types if (at := R.get(t)) and at.co_approver_perm}
+
+
+def _co_view(conn, p: dict) -> dict:
+    v = view(conn, None, p["id"])
+    req = row(conn, "SELECT username, display_name FROM users WHERE id=?", (p["user_id"],))
+    return {"id": v["id"], "title": v["title"], "version": v["version"], "hash": v["hash"], "summary": v["summary"],
+            "requested_by": req["display_name"] if req else None, "requested_username": req["username"] if req else None,
+            "created_at": v["created_at"],
+            "items": [{k: i[k] for k in ("index", "action_type", "args", "expected_effect", "state")} for i in v["items"]
+                      if i["state"] == "approved"],
+            "needs": sorted(co_perms_needed(i["action_type"] for i in v["items"] if i["state"] == "approved"))}
+
+
+def pending_co_approvals(conn, uid: str, can) -> list[dict]:
+    """Org-impacting proposals waiting for a second person: shared with people who hold the needed permission (only
+    these proposals — never the requester's other data). Your own requests are excluded (you can't co-approve them)."""
+    out = []
+    for p in rows(conn, "SELECT * FROM proposals WHERE status='awaiting_co_approval' AND user_id<>? ORDER BY updated_at",
+                  (uid,)):
+        v = _co_view(conn, p)
+        if v["needs"] and all(can(perm) for perm in v["needs"]):
+            out.append(v)
+    return out
+
+
+def co_approve(conn: sqlite3.Connection, uid: str, can, proposal_id: str, version: int, hash_: str, *,
+               decision: str = "approve", session_id: str | None = None) -> dict:
+    """A second person signs off on (or declines) an org-impacting proposal they're allowed to see."""
+    with tx(conn):
+        p = current_version(conn, None, proposal_id)
+        if p["status"] != "awaiting_co_approval" or p["user_id"] == uid:
+            raise ProposalError(404, "not_found", "Proposal not found.")
+        acts = actions_for_version(conn, p["pv"]["id"])
+        needed = co_perms_needed(a["action_type"] for a in acts if a["state"] == "approved")
+        if not needed or not all(can(perm) for perm in needed):
+            raise ProposalError(404, "not_found", "Proposal not found.")
+        if version != p["current_version"] or hash_ != p["pv"]["hash"]:
+            raise ProposalError(409, "stale_version", "This plan changed; review the current version.")
+        primary = row(conn, "SELECT * FROM approvals WHERE proposal_version_id=? AND kind='primary' AND revoked_at IS NULL",
+                      (p["pv"]["id"],))
+        if not primary:
+            raise ProposalError(409, "no_primary", "The requester's approval was withdrawn.")
+        if decision == "decline":
+            _void_approvals_and_jobs(conn, p["pv"]["id"], "declined by co-approver")
+            conn.execute("UPDATE proposed_actions SET state='cancelled', updated_at=? WHERE proposal_version_id=? "
+                         "AND state='approved'", (now_iso(), p["pv"]["id"]))
+            conn.execute("UPDATE proposals SET status='rejected', updated_at=? WHERE id=?", (now_iso(), proposal_id))
+            audit(conn, "user", "approval.co_declined", f"Co-approval declined: {p['title']}", "proposal", proposal_id,
+                  uid=uid)
+            return {"status": "rejected"}
+        if control_paused(conn):
+            raise ProposalError(423, "paused", "Actions are paused. Resume actions before approving.")
+        cid = new_id("appr")
+        conn.execute("INSERT INTO approvals (id, proposal_version_id, proposal_hash, selected_items, channel, session_id, "
+                     "evidence, created_at, approved_by, kind) VALUES (?,?,?,?,?,?,?,?,?, 'co')",
+                     (cid, p["pv"]["id"], p["pv"]["hash"], primary["selected_items"], "button", session_id,
+                      "co-approval", now_iso(), uid))
+        for a in acts:
+            if a["state"] == "approved":
+                conn.execute("UPDATE proposed_actions SET state='queued', updated_at=? WHERE id=?", (now_iso(), a["id"]))
+                jobs.enqueue(conn, "execute_action", {"action_id": a["id"], "approval_id": primary["id"]},
+                             dedupe_key=f"exec:{a['id']}:{primary['id']}", max_attempts=4)
+        conn.execute("UPDATE proposals SET status='queued', updated_at=?, row_version=row_version+1 WHERE id=?",
+                     (now_iso(), proposal_id))
+        audit(conn, "user", "approval.co_granted", f"Co-approved: {p['title']}", "proposal", proposal_id,
+              {"approval_id": cid}, uid=uid)
+        return {"status": "queued", "approval_id": cid}
 
 
 def reject(conn: sqlite3.Connection, uid: str, proposal_id: str, actor: str = "user") -> None:

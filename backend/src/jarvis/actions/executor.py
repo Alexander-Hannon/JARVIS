@@ -73,6 +73,9 @@ def _guard(conn, a: dict, pv: dict, p: dict, approval_id: str) -> None:
     if appr["approved_by"] != p["user_id"]:
         # Private by default: only the proposal's owner can approve it (or their own rule, channel 'policy').
         raise Blocked("cancelled", "Approval wasn't given by the plan's owner; approval is void.")
+    at0 = R.get(a["action_type"])
+    if at0 is not None and P.co_perms_needed([at0.name]):
+        _check_co_approval(conn, pv, p, at0.co_approver_perm)
     at = R.get(a["action_type"])
     if at is None or R.provider_for(at.name) != a["provider"]:
         raise Blocked("failed", f"Action type {a['action_type']} is not enabled.")
@@ -91,6 +94,16 @@ def _guard(conn, a: dict, pv: dict, p: dict, approval_id: str) -> None:
     if a["account_id"] and at.grant_type and (at.grant_always or a["target_resource"]):
         if not A.has_grant(conn, a["account_id"], at.grant_type, a["target_resource"] or "", "write"):
             raise Blocked("failed", f"No write permission recorded for {at.grant_type} '{a['target_resource']}'.")
+
+
+def _check_co_approval(conn, pv: dict, p: dict, perm: str) -> None:
+    """Org-impacting types: a different, active person who *still* holds `perm` co-approved this exact version."""
+    from jarvis.security.principal import PERMS
+    co = row(conn, "SELECT a.approved_by, u.role, u.status FROM approvals a JOIN users u ON u.id=a.approved_by "
+                   "WHERE a.proposal_version_id=? AND a.proposal_hash=? AND a.kind='co' AND a.revoked_at IS NULL",
+             (pv["id"], pv["hash"]))
+    if not co or co["approved_by"] == p["user_id"] or co["status"] != "active" or co["role"] not in PERMS[perm]:
+        raise Blocked("cancelled", "This change affects the whole organization and needs a co-approver's sign-off.")
 
 
 def _set_state(conn, a_id: str, state: str, **fields) -> None:
