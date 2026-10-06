@@ -7,6 +7,7 @@ import { TelegramCard } from '../../components/TelegramCard';
 import { Async, Badge, Card, Empty, ErrorBox, KV, ReasonButton, SecretForm, StateBadge } from '../../components/ui';
 import { fmtDateTime, fmtRelative, humanValue, textOf } from '../../lib/format';
 import { useAsync } from '../../lib/hooks';
+import { useAuth } from '../../state/auth';
 
 function IntegrationRow({ i, onChanged }: { i: Integration; onChanged: () => void }) {
   const [confirm, setConfirm] = useState(false);
@@ -648,6 +649,7 @@ function GithubSection({ onChanged }: { onChanged: () => void }) {
 }
 
 export function IntegrationsSection() {
+  const { can } = useAuth();
   const integrations = useAsync(() => api.integrations(), []);
   const list = integrations.data ?? [];
   const reload = () => void integrations.reload();
@@ -673,7 +675,7 @@ export function IntegrationsSection() {
       <TelegramCard />
       <IcsSection integration={find('ics')} onChanged={reload} />
       <GithubSection onChanged={reload} />
-      <Card title="Anthropic (reasoning model)" id="connect-anthropic">
+      {can('org.integrations') && <Card title="Anthropic (reasoning model)" id="connect-anthropic">
         <SecretForm
           label="Anthropic API key"
           placeholder={find('anthropic') ? 'Configured — enter a new key to replace' : 'sk-ant-…'}
@@ -684,7 +686,7 @@ export function IntegrationsSection() {
           }}
           hint="Stored encrypted server-side; never sent to the browser again. Prompts and selected excerpts sent to Anthropic leave this machine."
         />
-      </Card>
+      </Card>}
       {integrations.error && list.length > 0 ? <p className="bad-text small">{errorMessage(integrations.error)}</p> : null}
     </div>
   );

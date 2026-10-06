@@ -1,22 +1,28 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { AccountSection } from './settings/Account';
 import { IntegrationsSection } from './settings/Integrations';
+import { UsersSection } from './settings/Users';
+import { useAuth } from '../state/auth';
 import { LocalOpsSection, PrivacySection, SecuritySection, VoiceSection } from './settings/Personal';
 import { BackupsSection, BudgetSection, DoctorSection, NotificationSettingsSection, SchedulesSection } from './settings/System';
 
-const SECTIONS = [
-  { key: 'integrations', label: 'Integrations' },
-  { key: 'voice', label: 'Voice' },
-  { key: 'schedules', label: 'Schedules' },
-  { key: 'notifications', label: 'Notifications' },
-  { key: 'budget', label: 'Budget' },
-  { key: 'privacy', label: 'Privacy' },
-  { key: 'local', label: 'Local files' },
-  { key: 'backups', label: 'Backups' },
-  { key: 'doctor', label: 'Diagnostics' },
-  { key: 'security', label: 'Security' },
+// `perm`: who sees the section (the server enforces the same permissions on every call).
+const ALL_SECTIONS = [
+  { key: 'integrations', label: 'Integrations', perm: 'use' },
+  { key: 'account', label: 'Account', perm: null },
+  { key: 'voice', label: 'Voice', perm: 'use' },
+  { key: 'schedules', label: 'Schedules', perm: 'use' },
+  { key: 'notifications', label: 'Notifications', perm: 'use' },
+  { key: 'budget', label: 'Budget', perm: 'org.settings' },
+  { key: 'privacy', label: 'Privacy', perm: 'use' },
+  { key: 'local', label: 'Local files', perm: 'use' },
+  { key: 'users', label: 'People', perm: 'users.manage' },
+  { key: 'backups', label: 'Backups', perm: 'org.backups' },
+  { key: 'doctor', label: 'Diagnostics', perm: 'org.doctor' },
+  { key: 'security', label: 'Security', perm: null },
 ] as const;
-type Key = (typeof SECTIONS)[number]['key'];
+type Key = (typeof ALL_SECTIONS)[number]['key'];
 
 const CONNECT_ERRORS: Record<string, string> = {
   bad_state: 'That Google sign-in link expired or was already used. Click Connect again.',
@@ -28,10 +34,13 @@ const CONNECT_ERRORS: Record<string, string> = {
 export function SettingsPage({ onLoggedOut }: { onLoggedOut: () => void }) {
   const loc = useLocation();
   const nav = useNavigate();
-  const fromHash = (loc.hash.slice(1) || 'integrations') as Key;
-  const [section, setSection] = useState<Key>(SECTIONS.some((s) => s.key === fromHash) ? fromHash : 'integrations');
+  const { can } = useAuth();
+  const SECTIONS = ALL_SECTIONS.filter((x) => x.perm === null || can(x.perm));
+  const fromHash = (loc.hash.slice(1) || SECTIONS[0].key) as Key;
+  const [section, setSection] = useState<Key>(SECTIONS.some((s) => s.key === fromHash) ? fromHash : SECTIONS[0].key);
   useEffect(() => {
     if (SECTIONS.some((s) => s.key === fromHash)) setSection(fromHash);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromHash]);
   // Result of an OAuth round-trip (?connected=google / ?connect_error=code), shown once.
   const [oauthResult] = useState(() => {
@@ -80,6 +89,8 @@ export function SettingsPage({ onLoggedOut }: { onLoggedOut: () => void }) {
             </p>
           )}
           {section === 'integrations' && <IntegrationsSection />}
+          {section === 'account' && <AccountSection />}
+          {section === 'users' && <UsersSection />}
           {section === 'voice' && <VoiceSection />}
           {section === 'schedules' && <SchedulesSection />}
           {section === 'notifications' && <NotificationSettingsSection />}

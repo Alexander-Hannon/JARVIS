@@ -5,6 +5,7 @@ import { SpeechControls } from '../../components/SpeechControls';
 import { Async, Badge, Card, ErrorBox, KV, StateBadge, Toggle } from '../../components/ui';
 import { fmtDateTime, fmtRelative } from '../../lib/format';
 import { useAsync } from '../../lib/hooks';
+import { useAuth } from '../../state/auth';
 import { CANDIDATE_MIME_TYPES, micCapabilityProblem, pickMimeType } from '../../voice/recorder';
 
 export function VoiceSection() {
@@ -150,6 +151,8 @@ function VaultToggle({ rootId, vault, onChanged }: { rootId: string; vault: Vaul
 }
 
 export function LocalOpsSection() {
+  const { can } = useAuth();
+  const admin = can('org.integrations');
   const roots = useAsync(() => api.localRoots(), []);
   const vault = useAsync(() => api.vault(), []);
   const [path, setPath] = useState('');
@@ -190,7 +193,7 @@ export function LocalOpsSection() {
                       Cancel
                     </button>
                   </span>
-                ) : (
+                ) : admin && (
                   <button type="button" className="btn btn-small btn-danger-ghost" onClick={() => setConfirmId(r.id)}>
                     Remove…
                   </button>
@@ -200,7 +203,8 @@ export function LocalOpsSection() {
           </ul>
         )}
       </Async>
-      <form
+      {!admin && <p className="hint">Folders on the JARVIS host are assigned by an admin.</p>}
+      {admin && <form
         className="grid-form"
         onSubmit={async (e) => {
           e.preventDefault();
@@ -228,7 +232,7 @@ export function LocalOpsSection() {
         <button type="submit" className="btn btn-primary" disabled={!path.trim()}>
           Add root
         </button>
-      </form>
+      </form>}
       <ErrorBox error={err} />
     </Card>
   );

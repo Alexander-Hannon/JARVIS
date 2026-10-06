@@ -5,14 +5,92 @@
 export type ISODate = string;
 
 // ---------- Auth ----------
+export type Role = 'owner' | 'admin' | 'approver' | 'member' | 'auditor';
+export interface Me {
+  id: string;
+  username: string;
+  display_name: string;
+  role: Role;
+  auth_level: string;
+}
+export interface MfaState {
+  required: boolean;
+  enrolled: boolean;
+  satisfied: boolean;
+}
 export interface AuthStatus {
   owner_exists: boolean;
   authenticated: boolean;
   csrf_token?: string | null;
+  user?: Me | null;
+  mfa?: MfaState | null;
   remote_mode: boolean;
   setup_allowed: boolean;
   /** No owner yet and this browser isn't directly on the host: setup needs the console token. */
   setup_token_required?: boolean;
+}
+export interface MfaChallenge {
+  mfa_required: true;
+  challenge_id: string;
+  methods: ('totp' | 'webauthn' | 'recovery')[];
+  webauthn: Record<string, unknown> | null;
+}
+export type LoginResult = CsrfResponse | MfaChallenge;
+export interface MfaMethod {
+  id: string;
+  kind: 'totp' | 'webauthn';
+  label: string;
+  created_at: ISODate;
+  last_used_at: ISODate | null;
+}
+export interface MfaOverview extends MfaState {
+  policy: 'off' | 'privileged' | 'all';
+  methods: MfaMethod[];
+  recovery_codes_left: number;
+}
+export interface TotpBegin {
+  id: string;
+  secret: string;
+  otpauth_uri: string;
+}
+export interface EnrollResult {
+  ok: boolean;
+  recovery_codes: string[] | null;
+}
+export interface InviteInfo {
+  username: string;
+  display_name: string;
+  expires_at: ISODate;
+}
+export interface AdminUser {
+  id: string;
+  username: string;
+  display_name: string;
+  email: string | null;
+  role: Role;
+  status: 'active' | 'disabled';
+  created_at: ISODate;
+  last_login_at: ISODate | null;
+  mfa_methods: number;
+  active_sessions: number;
+  has_password: boolean;
+  invite_pending_until: ISODate | null;
+}
+export interface InviteLink {
+  invite_url: string;
+  invite_expires_hours: number;
+}
+export interface CoApproval {
+  id: string;
+  title: string;
+  version: number;
+  hash: string;
+  summary: string;
+  requested_by: string | null;
+  requested_username: string | null;
+  created_at: ISODate;
+  items: { index: number; action_type: string; args: Record<string, unknown>; expected_effect: string; state: string }[];
+  needs: string[];
 }
 export interface CsrfResponse {
   csrf_token: string;
@@ -318,6 +396,8 @@ export interface Today {
   conflicts: string[];
   work_windows: { start: ISODate; end: ISODate; label: string }[];
   sources: Record<string, SourceInfo>;
+  /** How JARVIS greets the signed-in person */
+  greeting_name?: string;
 }
 
 export type BriefingKind = 'daily_command' | 'nightly_debrief' | 'weekly_war_room';
@@ -438,6 +518,10 @@ export interface JDocument {
     [stage: string]: unknown;
   } | null;
   segments: number | DocumentSegment[] | null;
+  /** private, or shared read-only with the whole organization */
+  visibility?: 'private' | 'org';
+  /** false = shared with you by someone else (read-only) */
+  own?: boolean;
 }
 export type SearchHit = Citation & { kind: string; score: number };
 export interface EvidencePreview {

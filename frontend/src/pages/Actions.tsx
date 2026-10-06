@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { api } from '../api/client';
-import type { ActionHistoryEntry } from '../api/types';
+import type { ActionHistoryEntry, CoApproval } from '../api/types';
 import { ProposalCard } from '../components/ProposalCard';
 import { PageHead } from '../components/PageHead';
 import { Policies } from '../components/Policies';
@@ -140,6 +140,39 @@ function HistoryEntry({ h, onChanged }: { h: ActionHistoryEntry; onChanged: () =
   );
 }
 
+/** Org-wide changes other people asked for that you're allowed to co-approve (e.g. installing a skill for everyone). */
+function CoApprovals() {
+  const list = useAsync(() => api.coApprovals(), []);
+  const [err, setErr] = useState<unknown>(null);
+  if (!list.data || list.data.length === 0) return null;
+  const decide = async (c: CoApproval, decision: 'approve' | 'decline') => {
+    setErr(null);
+    try {
+      await api.coApprove(c.id, c.version, c.hash, decision);
+      await list.reload();
+    } catch (e) {
+      setErr(e);
+    }
+  };
+  return (
+    <Card title={`Needs your co-approval (${list.data.length})`} className="co-approvals">
+      <p className="hint">These change JARVIS for the whole organization. The requester already approved; a second person must agree.</p>
+      {list.data.map((c) => (
+        <div key={c.id} className="co-item" data-testid="co-approval">
+          <strong>{c.title}</strong> <span className="muted">requested by {c.requested_by ?? c.requested_username}</span>
+          <ul>{c.items.map((i) => <li key={i.index}>{i.expected_effect}
+            {typeof i.args.body === 'string' && <pre className="small">{i.args.body.slice(0, 1200)}</pre>}</li>)}</ul>
+          <div className="row">
+            <button type="button" className="btn btn-primary btn-small" onClick={() => void decide(c, 'approve')}>Co-approve</button>
+            <button type="button" className="btn btn-small btn-danger-ghost" onClick={() => void decide(c, 'decline')}>Decline</button>
+          </div>
+        </div>
+      ))}
+      <ErrorBox error={err} />
+    </Card>
+  );
+}
+
 export function ActionsPage() {
   const [tab, setTab] = useState<'active' | 'history' | 'policies'>('active');
   const proposals = useAsync(() => api.proposals('active'), []);
@@ -174,6 +207,7 @@ export function ActionsPage() {
           { key: 'policies', label: 'Rules' },
         ]}
       />
+      {tab === 'active' && <CoApprovals />}
       {tab === 'policies' ? (
         <Policies />
       ) : tab === 'active' ? (
